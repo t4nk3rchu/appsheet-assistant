@@ -1,0 +1,9 @@
+node_modules/
+dist/
+web-ext-artifacts/
+reverse/
+*.log
+.DS_Store
+.claude
+.superpowers
+Appsheet Schema

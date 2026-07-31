@@ -1,0 +1,33 @@
+{
+  "name": "appsheet-assistant",
+  "version": "1.0.0",
+  "description": "AI assistant for the AppSheet editor: build columns/views/actions, check schema, back up config. Open-source, cross-browser (Firefox 128+ / Chrome) rebuild.",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "TARGET=firefox vite",
+    "build:firefox": "TARGET=firefox vite build",
+    "build:chrome": "TARGET=chrome vite build",
+    "test": "vitest run",
+    "lint:ext": "web-ext lint -s dist"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "jszip": "^3.10.1",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "webextension-polyfill": "^0.12.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@types/webextension-polyfill": "^0.12.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.1.5",
+    "vite-plugin-web-extension": "^4.5.1",
+    "vitest": "^4.1.10",
+    "web-ext": "^10.5.0"
+  }
+}
