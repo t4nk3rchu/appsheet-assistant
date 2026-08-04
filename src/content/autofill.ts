@@ -1417,7 +1417,11 @@ async function afOpenTableSettings(tableName: string): Promise<string | null> {
 
   // Find the table's tree item. Match on the label node's own text (textContent
   // of the whole row includes nested column names when the item is expanded).
-  const norm = (s: string) => String(s || "").trim().toLowerCase();
+  // Tables with slices/children render a count suffix e.g. "CHI_CT (2)", so an
+  // exact-text match silently failed for them — strip a trailing "(<digits>)"
+  // before comparing (same normalization ttOpenTable uses on the columns tree).
+  const norm = (s: string) =>
+    String(s || "").replace(/\s*\(\d+\)\s*$/, "").trim().toLowerCase();
   const target = norm(tableName);
   let tableEl: Element | null = null;
   for (const t of document.querySelectorAll(".MuiTreeItem-root")) {
@@ -1450,6 +1454,39 @@ async function afOpenTableSettings(tableName: string): Promise<string | null> {
   }
 }
 
+/** Confirm an expression landed by polling whether the control now holds ANY
+ *  non-empty value. Exact matching is unreliable here: the committed value lands
+ *  in the readonly inline input a beat after Save, AppSheet reformats it
+ *  (spacing, and >= renders as ≥), and there can be a hidden input alongside the
+ *  visible one. A non-empty value in any of the control's inputs is a solid
+ *  "a filter is now set" signal; only a field that stays empty is a real
+ *  failure. (This is why afSetExpression's eager inline read-back false-negatived.) */
+async function afControlHasValue(label: string): Promise<boolean> {
+  // Re-query the control FRESH each poll: setting the expression re-renders the
+  // FormControl, so a reference captured beforehand goes stale (detached, empty)
+  // while the value-bearing node is a new element in the DOM.
+  const sel = `.MuiDialog-paper .FormControl[data-label="${label}"]`;
+  for (let i = 0; i < 24; i++) {
+    const ctrl = document.querySelector(sel);
+    if (ctrl) {
+      const inputs = Array.from(ctrl.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea"));
+      if (inputs.some((el) => String(el.value || "").trim().length > 0)) return true;
+      const cm = ctrl.querySelector(".cm-content, .CodeMirror-code");
+      if (cm && String(cm.textContent || "").trim().length > 0) return true;
+    }
+    await ttSleep(130);
+  }
+  // Give-up diagnostic — makes a false-negative debuggable from the console.
+  const ctrl = document.querySelector(sel);
+  const dump = ctrl
+    ? Array.from(ctrl.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea"))
+        .map((el) => JSON.stringify(el.value))
+        .join(" | ") || "(no inputs)"
+    : "(control not found)";
+  console.log(`[HOC] afControlHasValue("${label}") empty after poll; inputs=[${dump}]`);
+  return false;
+}
+
 /** Set a table's security filter or update formula via the settings dialog. */
 async function afFillTable(ch: Change): Promise<OpResult> {
   const tableName = ch.table || "";
@@ -1462,16 +1499,14 @@ async function afFillTable(ch: Change): Promise<OpResult> {
   const dialog = document.querySelector(".MuiDialog-paper");
   if (!dialog) return { ok: false, reason: "Dialog settings không tìm thấy." };
 
-  let anyFilled = false;
-
   // Security filter (data filter) — a plain ExpressionControl input.
   if (ch.dataFilter) {
     const ctrl = dialog.querySelector('.FormControl[data-label="Security filter"]');
     (ctrl as HTMLElement | null)?.scrollIntoView({ block: "center" });
     await ttSleep(150);
     const inp = ctrl?.querySelector<HTMLInputElement>(".ExpressionControl input, input.MuiInputBase-input, input.MuiOutlinedInput-input");
-    if (inp && (await afSetExpression(inp, ch.dataFilter))) anyFilled = true;
-    else failed.push("dataFilter");
+    await afSetExpression(inp ?? null, ch.dataFilter);
+    if (!(await afControlHasValue("Security filter"))) failed.push("dataFilter");
     await ttSleep(400);
   }
 
@@ -1485,16 +1520,22 @@ async function afFillTable(ch: Change): Promise<OpResult> {
     const sw = ctrl?.querySelector(".ExpressionSwitchControl");
     if (sw) {
       const inp = await afFlipToExpr(sw);
-      if (inp && (await afSetExpression(inp, ch.updateModeExpression))) anyFilled = true;
-      else failed.push("updateModeExpression");
+      await afSetExpression(inp, ch.updateModeExpression);
+      if (!(await afControlHasValue("Are updates allowed?"))) failed.push("updateModeExpression");
     } else {
       failed.push("updateModeExpression");
     }
     await ttSleep(400);
   }
 
-  // Click "Done" button to save (but only if we actually filled something)
-  if (anyFilled) {
+  // Save the dialog if we ATTEMPTED any field. The Expression Assistant's own
+  // Save stages the value into the dialog's pending state; the dialog "Done" is
+  // what persists it to the app model. This was previously gated on `anyFilled`
+  // (derived from afSetExpression's inline read-back, which is unreliable for the
+  // Security-filter field) — so a false-negative skipped Done and the change
+  // reverted on reload. Click Done whenever a field was requested.
+  const attempted = !!ch.dataFilter || !!ch.updateModeExpression;
+  if (attempted) {
     const doneBtn = Array.from(dialog.querySelectorAll("button")).find((b) =>
       /^\s*done\s*$/i.test((b.textContent || "").trim())
     );
@@ -1505,11 +1546,8 @@ async function afFillTable(ch: Change): Promise<OpResult> {
   }
 
   return {
-    ok: failed.length === 0 && anyFilled,
-    reason:
-      !anyFilled ? "Không có field nào được fill" :
-      failed.length ? "Field chưa vào (kiểm tay): " + failed.join(", ") :
-      "Đã cập nhật bảng",
+    ok: failed.length === 0,
+    reason: failed.length ? "Field chưa vào (kiểm tay): " + failed.join(", ") : "Đã cập nhật bảng",
   };
 }
 
