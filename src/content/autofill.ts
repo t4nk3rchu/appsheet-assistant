@@ -642,6 +642,19 @@ async function afSetPanelProp(panel: Element, label: string, value: string): Pro
     await ttSleep(120);
     return true;
   }
+  // Image dropdown (e.g. Chart "Chart type", "Map type"): a grid of .ImageOption
+  // buttons each labeled by .ImageOptionLabel. Match the label case-insensitively.
+  const imgDd = fc.querySelector(".ImageDropdownControl");
+  if (imgDd) {
+    if (ttSame(imgDd.getAttribute("data-value"), v)) return true;
+    const opt = Array.from(imgDd.querySelectorAll<HTMLElement>(".ImageOptions .ImageOption")).find((o) =>
+      ttSame(o.querySelector(".ImageOptionLabel")?.textContent || "", v),
+    );
+    if (!opt) return false;
+    ttClick(opt);
+    await ttSleep(150);
+    return true;
+  }
   const esw = fc.querySelector(".ExpressionSwitchControl");
   if (esw) {
     const inp = await afFlipToExpr(esw);
@@ -1874,6 +1887,22 @@ async function afFillView(ch: Change): Promise<OpResult> {
     // Sort by/Group by. Map {view,size} → its {column,order} instead of a new engine.
     const items = ch.viewEntries.map((e) => ({ column: e.view, order: e.size }));
     if (!(await afVfeOrderedList(pane, "View entries", items))) failed.push("viewEntries");
+    await ttSleep(90);
+    pane = afVfe();
+  }
+  if (ch.chartType) {
+    // Chart type is an ImageDropdownControl (visual grid), not a <select> —
+    // afSetPanelProp handles that kind; keep afVfeDropdown as a fallback.
+    const okCt = (await afSetPanelProp(pane as Element, "Chart type", ch.chartType)) || afVfeDropdown(pane, "Chart type", ch.chartType);
+    if (!okCt) failed.push("chartType");
+    await ttSleep(150);
+    pane = afVfe();
+  }
+  if (ch.chartColumns?.length) {
+    // Chart columns is an OrderedListControl (MuiSelect per row) — same shape as
+    // Sort by / View entries, so afVfeOrderedList drives it.
+    const items = ch.chartColumns.map((c) => ({ column: c }));
+    if (!(await afVfeOrderedList(pane, "Chart columns", items))) failed.push("chartColumns");
     await ttSleep(90);
     pane = afVfe();
   }
