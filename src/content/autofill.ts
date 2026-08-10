@@ -1650,6 +1650,30 @@ function afVfeNameInput(): HTMLInputElement | null {
   return c ? c.querySelector<HTMLInputElement>("input") : null;
 }
 
+/** Navigate to UX → Views (the views LIST), confirming by the "Add View" button.
+ *  afGotoSection("ux") only checks that #PresentationPane exists, so it no-ops on
+ *  ANY UX sub-pane — including Format Rules, where "Add View" and the view tree
+ *  aren't present. A changeset that runs a format-rule op before an add_view/
+ *  set_view would then fail ("no Add View button" / view not found in tree). Hash
+ *  routing (#UX.Views) lands on the Views list from any sub-pane, same trick as
+ *  afGotoFormatRules. */
+async function afGotoViews(): Promise<boolean> {
+  const ADD = 'button[aria-label="Add View"]';
+  if (document.querySelector(ADD)) return true;
+  try {
+    if (!/UX\.Views(\.|$)/i.test(location.hash)) {
+      location.hash = "UX.Views";
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    }
+  } catch {
+    /* ignore */
+  }
+  if (await afWaitFor(ADD, 8000)) return true;
+  // Fallback: the generic UX nav click.
+  await afGotoSection("ux");
+  return !!(await afWaitFor(ADD, 3000));
+}
+
 /** Open an existing view in the UX pane by clicking its tree item. */
 async function afOpenView(name: string): Promise<Element | null> {
   const cur = afVfeNameInput();
@@ -1812,7 +1836,10 @@ async function afVfeOrderedList(pane: Element | null, label: string, items: { co
 
 /** Create or edit a UX view (source afFillView ~9827). */
 async function afFillView(ch: Change): Promise<OpResult> {
-  await afGotoSection("ux");
+  // Ensure the Views LIST is showing (not just "somewhere in UX") — a prior
+  // format-rule op leaves the pane on Format Rules, where Add View / the view
+  // tree don't exist.
+  if (!(await afGotoViews())) return { ok: false, reason: "Không mở được UX → Views (không thấy nút Add View)." };
   let pane: Element | null;
   if (ch.op === "add_view") {
     pane = await afCreateView();
