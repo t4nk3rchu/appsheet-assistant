@@ -84,6 +84,6 @@ window.addEventListener("message", onBridgeMessage as any);
 window.__hocAppSheetBridge = true;
 // Build marker — lets us verify the tab actually loaded the latest bundle
 // (Firefox keeps the old MAIN-world script until the tab is hard-reloaded).
-const HOC_BUILD = "2026-08-10c";
+const HOC_BUILD = "2026-08-10d";
 (window as any).__hocBuild = HOC_BUILD;
 console.log("[HOC] AppSheet bridge loaded — build " + HOC_BUILD);

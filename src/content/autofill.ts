@@ -1913,6 +1913,16 @@ async function afFillView(ch: Change): Promise<OpResult> {
     if (!(await afVfeExpr(pane, "Show if", ch.showIf))) failed.push("showIf");
     await ttSleep(90);
   }
+  if (ch.properties) {
+    // VFE view panes share the column-editor markup (.FormControl[data-label] +
+    // .FormSection), so afSetPanelProp drives any simple view property by label —
+    // one mechanism for every view type, no per-type code.
+    for (const [label, val] of Object.entries(ch.properties)) {
+      if (!(await afSetPanelProp(pane as Element, label, String(val)))) failed.push(`prop:${label}`);
+      await ttSleep(120);
+      pane = afVfe();
+    }
+  }
 
   return {
     ok: failed.length === 0,
