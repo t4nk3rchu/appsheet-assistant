@@ -411,7 +411,10 @@ git add src/content/autofill.ts src/lib/prompts.ts src/content/bridge.ts
 git commit -m "feat(view): column order mode + add/remove columns"
 ```
 
-### Task C3: Reorder columns (spike-gated)
+### Task C3: Reorder columns (spike-gated) — DEFERRED
+
+**Outcome (2026-08-10):** Spike ran; reorder NOT shipped. The per-row drag handle is hover-gated, and the widget uses a JS sorter that needs real-time `pointermove` sequencing — a synthesized (synchronous) drag corrupts the widget's transient state instead of reordering. Per the decision gate + pre-authorized fallback, C1/C2 shipped and reorder is a follow-up. Hook point marked with `// ponytail:` in `afSetColumnOrder`. A future attempt: hover row → reveal handle → timed multi-step pointer drag (likely needs rAF-spaced moves across the drag).
+
 
 **Files:**
 - Modify: `src/content/autofill.ts` (new `afReorderColumns`, called from `afSetColumnOrder`)

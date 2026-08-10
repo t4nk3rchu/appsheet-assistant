@@ -1883,6 +1883,12 @@ async function afSetColumnOrder(pane: Element, mode: string | undefined, cols: s
     }
     if (shouldCheck && !cb.checked) ok = false;
   }
+  // ponytail: reorder deferred — the per-row drag handle is hover-gated and the
+  // widget uses a JS sorter that needs real-time pointermove sequencing; a
+  // synthesized drag corrupts its transient state (see the C3 spike in
+  // docs/superpowers/specs/2026-08-10-view-properties-and-columns-design.md).
+  // viewColumns currently controls WHICH columns show, not their order. To add
+  // reorder: hover a row to reveal its handle, then drive a timed pointer drag.
   return ok;
 }
 
