@@ -1942,7 +1942,17 @@ async function afOpenSlice(name: string): Promise<Element | null> {
  *  expression" → clicking that opens the standard Expression modal (CodeMirror). */
 async function afSliceRowFilter(pane: Element, value: string): Promise<boolean> {
   const fc = afVfeCtrl(pane, "Row filter condition");
-  const ta = fc?.querySelector<HTMLTextAreaElement>("textarea");
+  if (!fc) return false;
+  // A slice that ALREADY has a filter (set_slice, or any re-render) shows the
+  // standard readonly ExpressionControl input that commits via the Expression
+  // Assistant modal — afSetExpression handles exactly that. The textarea combobox
+  // ("Create a new expression") only appears for a BLANK filter. Previously this
+  // only looked for the textarea, so set_slice returned false without applying
+  // (the old value stayed, masking the failure). Prefer the input; fall back to
+  // the combobox for the empty case.
+  const inp = fc.querySelector<HTMLInputElement>(".ExpressionControl input, input.MuiInputBase-input, input.MuiOutlinedInput-input");
+  if (inp) return afSetExpression(inp, value);
+  const ta = fc.querySelector<HTMLTextAreaElement>("textarea");
   if (!ta) return false;
   ttClick(ta);
   try {
