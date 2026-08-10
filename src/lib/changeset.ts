@@ -99,6 +99,8 @@ export interface Change {
   sortBy?: ViewOrderItem[];
   groupBy?: ViewOrderItem[];
   viewEntries?: ViewEntry[]; // dashboard: existing views to embed
+  chartType?: string; // chart view: Chart type dropdown
+  chartColumns?: string[]; // chart view: Chart columns ordered list
   // add_slice / set_slice
   slice?: string; // set_slice: existing slice name
   rowFilter?: string; // Row filter condition (true/false expression)
@@ -329,6 +331,20 @@ export function validateChangeset(tables: Table[], changes: unknown): Validation
         });
         if (entries.length) ch.viewEntries = entries;
         else delete ch.viewEntries;
+      }
+      // Chart view typed fields.
+      if (ch.chartType != null && typeof ch.chartType !== "string") add(i, "error", "'chartType' phải là chuỗi.");
+      if (!ch.chartType) delete ch.chartType;
+      if (ch.chartColumns != null) {
+        if (!Array.isArray(ch.chartColumns)) {
+          add(i, "error", "'chartColumns' phải là mảng tên cột.");
+          delete ch.chartColumns;
+        } else {
+          const cs2 = ch.table && tableNames.has(ch.table) ? colSet(ch.table) : null;
+          ch.chartColumns.forEach((cn) => {
+            if (cs2 && !cs2.has(String(cn).toLowerCase())) add(i, "warn", `chartColumns: cột không có trong ${ch.table}: ${cn}`);
+          });
+        }
       }
       normProperties(ch, i);
       norm.push(ch);

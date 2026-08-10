@@ -129,6 +129,15 @@ describe("validateChangeset", () => {
     expect(r.issues.filter((i) => i.level === "error").length).toBeGreaterThanOrEqual(3);
   });
 
+  it("validates chartColumns array and warns on unknown chart columns", () => {
+    const r = validateChangeset(tables, [
+      { op: "set_view", view: "V", table: "VĂN_BẢN", chartType: "pie", chartColumns: ["id", "ghost"] },
+    ]);
+    expect(r.ok).toBe(true);
+    expect(r.normalized[0].chartColumns).toEqual(["id", "ghost"]);
+    expect(r.issues.some((i) => i.level === "warn" && i.msg.includes("ghost"))).toBe(true);
+  });
+
   it("normalizes properties on a view op and drops empties", () => {
     const r = validateChangeset(tables, [
       { op: "set_view", view: "V", properties: { "Show legend": "true", "Trend line": "", "Chart colors": "Rainbow" } },
