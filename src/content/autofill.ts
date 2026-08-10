@@ -1847,6 +1847,45 @@ async function afVfeOrderedList(pane: Element | null, label: string, items: { co
   return ok;
 }
 
+/** Table view "Column order": set the Automatic|Manual EnumControl, then in
+ *  manual mode check exactly the columns in `cols` (include) and uncheck the
+ *  rest. Each column is a `.MuiFormControlLabel-root` with a checkbox; its label
+ *  text is the column name. Reorder (drag) is handled separately (afReorderColumns).
+ *  Verified live: the checkbox is the include toggle and it persists. */
+async function afSetColumnOrder(pane: Element, mode: string | undefined, cols: string[] | undefined): Promise<boolean> {
+  let fc = afVfeCtrl(pane, "Column order");
+  if (!fc) return false;
+  const wantManual = mode === "manual" || (!!cols && cols.length > 0 && mode !== "automatic");
+  const ec = fc.querySelector(".EnumControl");
+  if (ec) {
+    const target = wantManual ? "manual" : mode || "automatic";
+    if (ec.getAttribute("data-value") !== target) {
+      const opt = ec.querySelector<HTMLElement>(`.EnumOption[data-value="${target}"]`);
+      if (opt) {
+        ttClick(opt);
+        await ttSleep(300); // manual reveals the column list (re-renders the control)
+      }
+    }
+  }
+  if (!wantManual || !cols?.length) return true;
+  // Re-query after the enum switch re-render.
+  fc = afVfeCtrl(afVfe(), "Column order") || fc;
+  const want = new Set(cols.map((c) => c.toLowerCase()));
+  let ok = true;
+  for (const lbl of Array.from(fc.querySelectorAll(".MuiFormControlLabel-root"))) {
+    const name = (lbl.querySelector(".MuiFormControlLabel-label, .MuiTypography-root")?.textContent || lbl.textContent || "").trim();
+    const cb = lbl.querySelector<HTMLInputElement>('input[type="checkbox"]');
+    if (!cb || !name) continue;
+    const shouldCheck = want.has(name.toLowerCase());
+    if (cb.checked !== shouldCheck) {
+      ttClick(cb);
+      await ttSleep(120);
+    }
+    if (shouldCheck && !cb.checked) ok = false;
+  }
+  return ok;
+}
+
 /** Create or edit a UX view (source afFillView ~9827). */
 async function afFillView(ch: Change): Promise<OpResult> {
   // Ensure the Views LIST is showing (not just "somewhere in UX") — a prior
@@ -1924,6 +1963,11 @@ async function afFillView(ch: Change): Promise<OpResult> {
     await afVfeExpandSection(pane, "View Options");
     if (!afVfeDropdown(pane, "Group aggregate", ch.groupAggregate)) failed.push("groupAggregate");
     await ttSleep(90);
+  }
+  if (ch.columnOrder || ch.viewColumns?.length) {
+    if (!(await afSetColumnOrder(pane as Element, ch.columnOrder, ch.viewColumns))) failed.push("columnOrder");
+    await ttSleep(90);
+    pane = afVfe();
   }
   if (ch.displayName || ch.showIf || ch.icon) await afVfeExpandSection(pane, "Display");
   if (ch.icon) {
