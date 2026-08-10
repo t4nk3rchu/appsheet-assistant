@@ -98,6 +98,7 @@ export interface Change {
   groupAggregate?: string;
   sortBy?: ViewOrderItem[];
   groupBy?: ViewOrderItem[];
+  viewEntries?: ViewEntry[]; // dashboard: existing views to embed
   // add_slice / set_slice
   slice?: string; // set_slice: existing slice name
   rowFilter?: string; // Row filter condition (true/false expression)
@@ -118,6 +119,16 @@ export interface Change {
 export interface ViewOrderItem {
   column: string;
   order?: "Ascending" | "Descending";
+}
+
+/** Valid dashboard View-entry sizes (source: live editor "Select an option"). */
+export const VIEW_ENTRY_SIZES = ["Large", "Wide", "Tall", "Small"];
+
+/** One entry in a dashboard view's "View entries" list: an existing view to
+ *  embed, with an optional layout size. */
+export interface ViewEntry {
+  view: string;
+  size?: string;
 }
 
 export interface Issue {
@@ -262,8 +273,10 @@ export function validateChangeset(tables: Table[], changes: unknown): Validation
     if (ch.op === "add_view" || ch.op === "set_view") {
       if (ch.op === "add_view") {
         if (!ch.name) return add(i, "error", "add_view thiếu 'name'.");
-        if (!ch.table) return add(i, "error", "add_view thiếu 'table' (For this data).");
         if (!ch.viewType) return add(i, "error", "add_view thiếu 'viewType'.");
+        // Dashboards have no "For this data" binding — table is only required
+        // for the other view types.
+        if (!ch.table && ch.viewType !== "dashboard") return add(i, "error", "add_view thiếu 'table' (For this data).");
       } else if (!ch.view) {
         return add(i, "error", "set_view thiếu 'view' (tên view cần sửa).");
       }
@@ -295,6 +308,27 @@ export function validateChangeset(tables: Table[], changes: unknown): Validation
         });
         if (rows.length) (ch as any)[f] = rows;
         else delete (ch as any)[f];
+      }
+      // View entries (dashboard): array of view names or {view, size}. Normalize
+      // bare strings to {view}; drop empties. View names aren't checked here (the
+      // validator has the table list, not the view list) — the apply engine warns
+      // per entry that couldn't be selected.
+      if (ch.viewEntries == null) {
+        // nothing
+      } else if (!Array.isArray(ch.viewEntries)) {
+        add(i, "error", "'viewEntries' phải là mảng tên view hoặc {view, size}.");
+        delete ch.viewEntries;
+      } else {
+        const entries: ViewEntry[] = [];
+        (ch.viewEntries as any[]).forEach((raw2) => {
+          const view = String((typeof raw2 === "string" ? raw2 : raw2?.view) ?? "").trim();
+          if (!view) return add(i, "error", "'viewEntries': entry thiếu 'view'.");
+          const size = String(raw2?.size ?? "").trim();
+          if (size && VIEW_ENTRY_SIZES.indexOf(size) < 0) add(i, "warn", `viewEntries: size không hợp lệ: ${size} (${VIEW_ENTRY_SIZES.join("|")})`);
+          entries.push(size && VIEW_ENTRY_SIZES.indexOf(size) >= 0 ? { view, size } : { view });
+        });
+        if (entries.length) ch.viewEntries = entries;
+        else delete ch.viewEntries;
       }
       norm.push(ch);
       return;
@@ -364,7 +398,10 @@ export function summarize(ch: Change): string {
   if (ch.op === "set_slice") return `set_slice  "${ch.slice}"`;
   if (ch.op === "add_action") return `add_action  "${ch.name}" (${ch.actionType}) @ ${ch.table}`;
   if (ch.op === "set_action") return `set_action  "${ch.action}"`;
-  if (ch.op === "add_view") return `add_view  "${ch.name}" (${ch.viewType}) @ ${ch.table}`;
+  if (ch.op === "add_view") {
+    const where = ch.table ? ` @ ${ch.table}` : ch.viewEntries?.length ? `  (${ch.viewEntries.length} entries)` : "";
+    return `add_view  "${ch.name}" (${ch.viewType})${where}`;
+  }
   if (ch.op === "set_view") return `set_view  "${ch.view}"`;
   if (ch.op === "add_format_rule") return `add_format_rule  "${ch.name}" @ ${ch.table}`;
   return `set_format_rule  "${ch.rule}"`;

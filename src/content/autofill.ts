@@ -1841,6 +1841,15 @@ async function afFillView(ch: Change): Promise<OpResult> {
     await ttSleep(170);
     pane = afVfe();
   }
+  if (ch.viewEntries?.length) {
+    // ponytail: "View entries" is an OrderedListControl (MuiSelect view picker +
+    // .dropdownSelect size) — the exact shape afVfeOrderedList already drives for
+    // Sort by/Group by. Map {view,size} → its {column,order} instead of a new engine.
+    const items = ch.viewEntries.map((e) => ({ column: e.view, order: e.size }));
+    if (!(await afVfeOrderedList(pane, "View entries", items))) failed.push("viewEntries");
+    await ttSleep(90);
+    pane = afVfe();
+  }
   if (ch.position) {
     if (!afVfeEnum(pane, "Position", ch.position)) failed.push("position");
     await ttSleep(90);

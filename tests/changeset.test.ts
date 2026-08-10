@@ -100,6 +100,35 @@ describe("validateChangeset", () => {
     expect(r.issues.filter((i) => i.level === "error").length).toBeGreaterThanOrEqual(4);
   });
 
+  it("accepts a dashboard add_view without table and normalizes viewEntries", () => {
+    const r = validateChangeset(tables, [
+      {
+        op: "add_view",
+        name: "Home",
+        viewType: "dashboard",
+        icon: "th-large",
+        viewEntries: ["My List", { view: "Detail", size: "Tall" }, { view: "Bad", size: "Huge" }],
+      },
+    ]);
+    expect(r.ok).toBe(true); // no table required for dashboards; bad size only warns
+    expect(r.normalized[0].viewEntries).toEqual([
+      { view: "My List" },
+      { view: "Detail", size: "Tall" },
+      { view: "Bad" }, // invalid size dropped, entry kept
+    ]);
+    expect(r.issues.some((i) => i.level === "warn" && i.msg.includes("Huge"))).toBe(true);
+  });
+
+  it("still requires table for non-dashboard views and errors on bad viewEntries", () => {
+    const r = validateChangeset(tables, [
+      { op: "add_view", name: "V", viewType: "table" }, // non-dashboard, no table
+      { op: "add_view", name: "D", viewType: "dashboard", viewEntries: "nope" as any }, // not an array
+      { op: "add_view", name: "D2", viewType: "dashboard", viewEntries: [{ size: "Large" } as any] }, // entry missing view
+    ]);
+    expect(r.ok).toBe(false);
+    expect(r.issues.filter((i) => i.level === "error").length).toBeGreaterThanOrEqual(3);
+  });
+
   it("normalizes view sortBy/groupBy order and warns on unknown columns", () => {
     const r = validateChangeset(tables, [
       {
