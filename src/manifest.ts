@@ -51,7 +51,15 @@ export function buildManifest(target: Target) {
     };
     base.background = { scripts: ["src/background/index.ts"] };
     base.browser_specific_settings = {
-      gecko: { id: "appsheet-copilot@gimasys.com", strict_min_version: "128.0" },
+      gecko: {
+        id: "appsheet-copilot@gimasys.com",
+        strict_min_version: "128.0",
+        // Data-collection disclosure (Firefox 140+). The AI-generation feature
+        // (optional, BYOK) transmits the open app's structure + your prompt to
+        // the AI provider you configure. Everything else stays on-device.
+        // NOTE: verify this matches your intended disclosure in the AMO form.
+        data_collection_permissions: { required: ["websiteContent"] },
+      },
     };
   } else {
     base.side_panel = { default_path: "src/sidebar/index.html" };
