@@ -1,6 +1,24 @@
 // tests/skills.test.ts — the .skill/.md parser + prompt renderer.
 import { describe, it, expect } from "vitest";
-import { parseSkill, renderSkillsForPrompt } from "../src/lib/skills";
+import { parseSkill, renderSkillsForPrompt, parseSkillZip } from "../src/lib/skills";
+import { zipSync, strToU8 } from "fflate";
+
+describe("parseSkillZip", () => {
+  it("reads SKILL.md frontmatter + appends other .md files (fflate)", async () => {
+    const zip = zipSync({
+      "SKILL.md": strToU8("---\nname: my-skill\ndescription: does things\n---\nBody here"),
+      "references/extra.md": strToU8("Extra content"),
+      "assets/logo.png": strToU8("not markdown"),
+    });
+    const sk = await parseSkillZip("pkg.zip", zip.buffer as ArrayBuffer);
+    expect(sk.name).toBe("my-skill");
+    expect(sk.description).toBe("does things");
+    expect(sk.body).toContain("Body here");
+    expect(sk.body).toContain("references/extra.md");
+    expect(sk.body).toContain("Extra content");
+    expect(sk.body).not.toContain("not markdown"); // non-md skipped
+  });
+});
 
 describe("parseSkill", () => {
   it("reads name/description from frontmatter and keeps the body", () => {
