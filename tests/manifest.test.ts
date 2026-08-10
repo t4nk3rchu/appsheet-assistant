@@ -8,8 +8,10 @@ describe("buildManifest", () => {
     expect(m.background.scripts).toEqual(["src/background/index.ts"]);
     expect(m.background.service_worker).toBeUndefined();
     expect(m.browser_specific_settings.gecko.id).toMatch(/@/);
-    expect(m.browser_specific_settings.gecko.strict_min_version).toBe("128.0");
-    expect(m.name).toContain("(Firefox)");
+    expect(m.browser_specific_settings.gecko.strict_min_version).toBe("142.0");
+    // AMO rejects Firefox/Mozilla trademarks in the name.
+    expect(m.name).not.toContain("Firefox");
+    expect(m.browser_specific_settings.gecko.data_collection_permissions.required).toContain("websiteContent");
   });
   it("chrome target uses service_worker, no gecko settings", () => {
     const m = buildManifest("chrome") as any;

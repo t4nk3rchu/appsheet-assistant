@@ -61,30 +61,35 @@ const SKILL_BODY_CAP = 30000;
 /** Parse a .zip skill package (Anthropic-style: SKILL.md + references/*.md) into
  *  a single Skill. name/description come from SKILL.md frontmatter; body =
  *  SKILL.md body followed by each other .md file under its own "# path" heading.
- *  Needs JSZip; kept out of parseSkill so the md parser stays dependency-free. */
+ *  Uses fflate (no eval — JSZip's Function() constructor tripped AMO review);
+ *  kept out of parseSkill so the md parser stays dependency-free. */
 export async function parseSkillZip(filename: string, data: ArrayBuffer): Promise<Skill> {
-  const { default: JSZip } = await import("jszip");
-  const zip = await JSZip.loadAsync(data);
-  const entries = Object.values(zip.files).filter((f) => !f.dir);
+  const { unzipSync, strFromU8 } = await import("fflate");
+  // unzipSync returns { path: Uint8Array } for files only (directory entries end
+  // in "/"). Skill packages are a handful of small text files, so sync is fine.
+  const files = unzipSync(new Uint8Array(data));
+  const paths = Object.keys(files).filter((p) => !p.endsWith("/"));
+  const read = (p: string) => strFromU8(files[p]);
+
   // shallowest SKILL.md wins (the package's entry point)
-  const skillFile = entries
-    .filter((f) => /(^|\/)SKILL\.md$/i.test(f.name))
-    .sort((a, b) => a.name.split("/").length - b.name.split("/").length)[0];
+  const skillPath = paths
+    .filter((p) => /(^|\/)SKILL\.md$/i.test(p))
+    .sort((a, b) => a.split("/").length - b.split("/").length)[0];
 
   let name = String(filename || "skill").replace(/\.zip$/i, "").split("/").pop() || "skill";
   let description = "";
   const parts: string[] = [];
-  if (skillFile) {
-    const sk = parseSkill("SKILL.md", await skillFile.async("string"));
+  if (skillPath) {
+    const sk = parseSkill("SKILL.md", read(skillPath));
     name = sk.name;
     description = sk.description;
     if (sk.body) parts.push(sk.body);
   }
-  const others = entries
-    .filter((f) => f !== skillFile && /\.mdx?$/i.test(f.name))
-    .sort((a, b) => a.name.localeCompare(b.name));
-  for (const f of others) {
-    parts.push(`\n---\n# ${f.name}\n${(await f.async("string")).trim()}`);
+  const others = paths
+    .filter((p) => p !== skillPath && /\.mdx?$/i.test(p))
+    .sort((a, b) => a.localeCompare(b));
+  for (const p of others) {
+    parts.push(`\n---\n# ${p}\n${read(p).trim()}`);
   }
   let body = parts.join("\n").trim();
   if (body.length > SKILL_BODY_CAP) body = body.slice(0, SKILL_BODY_CAP) + "\n…(truncated)";

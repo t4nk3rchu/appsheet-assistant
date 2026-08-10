@@ -53,11 +53,13 @@ export function buildManifest(target: Target) {
     base.background = { scripts: ["src/background/index.ts"] };
     base.browser_specific_settings = {
       gecko: {
+        // 142.0: floor for data_collection_permissions on both desktop (140+)
+        // and Android (142+); also >= 128 that world:"MAIN" needs.
         id: "appsheet-copilot@gimasys.com",
-        strict_min_version: "128.0",
-        // Data-collection disclosure (Firefox 140+). The AI-generation feature
-        // (optional, BYOK) transmits the open app's structure + your prompt to
-        // the AI provider you configure. Everything else stays on-device.
+        strict_min_version: "142.0",
+        // Data-collection disclosure. The AI-generation feature (optional, BYOK)
+        // transmits the open app's structure + your prompt to the AI provider you
+        // configure. Everything else stays on-device.
         // NOTE: verify this matches your intended disclosure in the AMO form.
         data_collection_permissions: { required: ["websiteContent"] },
       },
