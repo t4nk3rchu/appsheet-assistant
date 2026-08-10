@@ -129,6 +129,14 @@ describe("validateChangeset", () => {
     expect(r.issues.filter((i) => i.level === "error").length).toBeGreaterThanOrEqual(3);
   });
 
+  it("normalizes properties on a view op and drops empties", () => {
+    const r = validateChangeset(tables, [
+      { op: "set_view", view: "V", properties: { "Show legend": "true", "Trend line": "", "Chart colors": "Rainbow" } },
+    ]);
+    expect(r.ok).toBe(true);
+    expect(r.normalized[0].properties).toEqual({ "Show legend": "true", "Chart colors": "Rainbow" });
+  });
+
   it("normalizes view sortBy/groupBy order and warns on unknown columns", () => {
     const r = validateChangeset(tables, [
       {

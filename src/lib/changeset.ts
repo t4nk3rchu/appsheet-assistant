@@ -330,6 +330,7 @@ export function validateChangeset(tables: Table[], changes: unknown): Validation
         if (entries.length) ch.viewEntries = entries;
         else delete ch.viewEntries;
       }
+      normProperties(ch, i);
       norm.push(ch);
       return;
     }
