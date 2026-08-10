@@ -279,6 +279,20 @@ function afSetText(input: HTMLInputElement | null, value: string): boolean {
   );
 }
 
+/** Poll whether an input's value survived React reconciliation.
+ *  The inline shortcut sets the DOM value, which passes an immediate check,
+ *  but React re-renders and reverts it when the editor has validation errors.
+ *  This function waits long enough for that revert to happen. */
+async function afValueStuck(inputEl: HTMLInputElement, expected: string, polls = 3, interval = 150): Promise<boolean> {
+  const norm = (s: string) => String(s ?? "").replace(/^\s*=/, "").trim().toLowerCase();
+  const want = norm(expected);
+  for (let i = 0; i < polls; i++) {
+    await ttSleep(interval);
+    if (norm(inputEl.value) !== want) return false;  // reverted — value didn't stick
+  }
+  return true;
+}
+
 // Set an AppSheet expression. The inline input is readonly + committed via the
 // Expression Assistant modal, so: try inline first; if it does not stick, open
 // the modal, inject into CodeMirror, then Save (source afSetExpression ~9217).
@@ -295,7 +309,14 @@ async function afSetExpression(inputEl: HTMLInputElement | null, value: string):
       inputEl.dispatchEvent(new Event("change", { bubbles: true }));
       if (wasRO) inputEl.setAttribute("readonly", "");
       await ttSleep(90);
-      if (ttSame(String(inputEl.value == null ? "" : inputEl.value).replace(/^\s*=/, ""), v)) return true;
+      if (ttSame(String(inputEl.value == null ? "" : inputEl.value).replace(/^\s*=/, ""), v)) {
+        // The value appears set NOW, but React may revert it on the next
+        // reconciliation if the editor has validation errors. Poll to confirm
+        // the value actually survived before declaring success.
+        if (await afValueStuck(inputEl, v)) return true;
+        // Value was reverted — fall through to the Expression Assistant modal.
+        console.warn("[HOC] afSetExpression: inline value reverted (editor errors?), falling back to modal");
+      }
     } catch {
       /* ignore */
     }
@@ -701,7 +722,10 @@ async function afSetCellSwitch(cell: Element, value: string): Promise<boolean> {
       ttClick(clk);
       await ttSleep(150);
     }
-    return true;
+    // Re-check: the toggle may not have persisted if the editor has errors.
+    const now = sw.querySelector(".CheckboxControl");
+    const isNow = now?.getAttribute("data-value") === "true" || now?.classList.contains("On");
+    return isNow === (v === "true");
   }
   const inp = await afFlipToExpr(sw);
   if (!inp) return false;
@@ -810,6 +834,59 @@ async function afFillSet(ch: Change): Promise<OpResult> {
   };
 }
 
+/** Trigger "Add virtual column". The columns-panel toolbar is RESPONSIVE: when
+ *  wide it shows a direct `button[title="Add virtual column"]`, but with our
+ *  sidebar open the editor is narrow and that "+" collapses into the panel's ⋮
+ *  overflow menu — so the direct button simply isn't in the DOM. Try the direct
+ *  button first; otherwise open the ⋮ menu and click the "Add virtual column"
+ *  menu item. The ⋮ leaves no aria-expanded trace, so we identify it by result:
+ *  click header icon buttons (rightmost first — ⋮ sits there) until the menu
+ *  item appears, Escaping any wrong menu we opened. */
+async function afClickAddVcol(): Promise<boolean> {
+  const direct = document.querySelector<HTMLElement>('button[title="Add virtual column"]');
+  if (direct) {
+    ttClick(direct);
+    return true;
+  }
+  const findItem = () =>
+    Array.from(document.querySelectorAll<HTMLElement>('li[role="menuitem"], .MuiMenuItem-root')).find((li) =>
+      /^\s*add virtual column\s*$/i.test((li.textContent || "").trim()),
+    ) || null;
+
+  const colsLabel = Array.from(document.querySelectorAll<HTMLElement>("*")).find(
+    (e) => e.children.length === 0 && /^Columns:\s*\d+/i.test((e.textContent || "").trim()),
+  );
+  const header: Element =
+    colsLabel?.closest(".MuiToolbar-root, header, .TableHeader") ||
+    colsLabel?.parentElement?.parentElement ||
+    document.querySelector("#appData") ||
+    document.body;
+
+  // Skip buttons whose click has side effects; the ⋮ itself has no aria-label.
+  const SKIP = /slice|add new data|delete|deploy|undo|redo|share|help|account|mobile|tablet|desktop|refresh|reload/i;
+  const triggers = Array.from(header.querySelectorAll<HTMLElement>("button.MuiIconButton-root"))
+    .filter((b) => b.offsetParent !== null && !SKIP.test(b.getAttribute("aria-label") || ""))
+    .reverse();
+
+  for (const t of triggers) {
+    ttClick(t);
+    const t0 = performance.now();
+    let it: HTMLElement | null = null;
+    while (performance.now() - t0 < 800) {
+      it = findItem();
+      if (it) break;
+      await ttSleep(90);
+    }
+    if (it) {
+      ttClick(it);
+      return true;
+    }
+    document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await ttSleep(120);
+  }
+  return false;
+}
+
 /** Create a virtual column: Data → open table → "Add virtual column" → fill the
  *  freshly-opened column panel (name, type, formula, …) (source afFillAdd ~9602).
  *  A VC's whole purpose is its App formula, so appFormula is the key field. */
@@ -817,9 +894,10 @@ async function afFillAdd(ch: Change): Promise<OpResult> {
   await afGotoSection("data");
   if (!(await ttOpenTable(ch.table!))) return { ok: false, reason: "Không mở được bảng " + ch.table };
   if (!ttFindGrid()) return { ok: false, reason: "Không thấy grid cột" };
-  const addBtn = document.querySelector<HTMLElement>('button[title="Add virtual column"]');
-  if (!addBtn) return { ok: false, reason: "Không thấy nút Add virtual column" };
-  ttClick(addBtn);
+  // Wait for the columns panel to settle, then trigger Add virtual column
+  // (direct button when wide, ⋮ overflow menu when narrow — our usual case).
+  await afWaitFor('button[title="Add virtual column"], #appData .MuiIconButton-root', 6000);
+  if (!(await afClickAddVcol())) return { ok: false, reason: "Không mở được Add virtual column (nút/menu)" };
   await ttSleep(500);
   const panel = document.querySelector(".ColumnControl.Open") || (await afWaitFor(".ColumnControl.Open, .ColumnControl", 5000));
   if (!panel) return { ok: false, reason: "Panel cột mới không mở" };
@@ -858,6 +936,18 @@ async function afFillAdd(ch: Change): Promise<OpResult> {
       if (!(await afSetPanelProp(panel, label, String(val)))) failed.push(`prop:${label}`);
       await ttSleep(120);
     }
+  }
+
+  // Commit the new column: click "Done" (class "button CancelAction", appears
+  // once fields are filled). Without this the vc is never registered, and the
+  // NEXT add_virtual_column op discards this uncommitted panel — so only the
+  // last one survived. Poll for the button, then wait for the panel to close.
+  const done = (await afWaitFor(".ColumnControl.Open button.CancelAction, .ColumnControl button.CancelAction", 4000)) as HTMLElement | null;
+  if (done) {
+    ttClick(done);
+    await ttSleep(600);
+  } else {
+    failed.push("commit(Done)");
   }
 
   return {
