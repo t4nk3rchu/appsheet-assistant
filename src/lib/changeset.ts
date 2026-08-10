@@ -101,6 +101,8 @@ export interface Change {
   viewEntries?: ViewEntry[]; // dashboard: existing views to embed
   chartType?: string; // chart view: Chart type dropdown
   chartColumns?: string[]; // chart view: Chart columns ordered list
+  columnOrder?: "automatic" | "manual"; // table view: Column order mode
+  viewColumns?: string[]; // table view: visible columns, in order
   // add_slice / set_slice
   slice?: string; // set_slice: existing slice name
   rowFilter?: string; // Row filter condition (true/false expression)
@@ -343,6 +345,21 @@ export function validateChangeset(tables: Table[], changes: unknown): Validation
           const cs2 = ch.table && tableNames.has(ch.table) ? colSet(ch.table) : null;
           ch.chartColumns.forEach((cn) => {
             if (cs2 && !cs2.has(String(cn).toLowerCase())) add(i, "warn", `chartColumns: cột không có trong ${ch.table}: ${cn}`);
+          });
+        }
+      }
+      // Table view column order.
+      if (ch.columnOrder != null && ch.columnOrder !== "automatic" && ch.columnOrder !== "manual")
+        add(i, "error", `columnOrder không hợp lệ: ${ch.columnOrder} (automatic|manual)`);
+      if (!ch.columnOrder) delete ch.columnOrder;
+      if (ch.viewColumns != null) {
+        if (!Array.isArray(ch.viewColumns)) {
+          add(i, "error", "'viewColumns' phải là mảng tên cột.");
+          delete ch.viewColumns;
+        } else {
+          const cs3 = ch.table && tableNames.has(ch.table) ? colSet(ch.table) : null;
+          ch.viewColumns.forEach((cn) => {
+            if (cs3 && !cs3.has(String(cn).toLowerCase())) add(i, "warn", `viewColumns: cột không có trong ${ch.table}: ${cn}`);
           });
         }
       }

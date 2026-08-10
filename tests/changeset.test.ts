@@ -129,6 +129,19 @@ describe("validateChangeset", () => {
     expect(r.issues.filter((i) => i.level === "error").length).toBeGreaterThanOrEqual(3);
   });
 
+  it("validates columnOrder enum and viewColumns, warns unknown columns", () => {
+    const ok = validateChangeset(tables, [
+      { op: "set_view", view: "V", table: "VĂN_BẢN", columnOrder: "manual", viewColumns: ["id", "ghost"] },
+    ]);
+    expect(ok.ok).toBe(true);
+    expect(ok.normalized[0].viewColumns).toEqual(["id", "ghost"]);
+    expect(ok.issues.some((i) => i.level === "warn" && i.msg.includes("ghost"))).toBe(true);
+    const bad = validateChangeset(tables, [
+      { op: "set_view", view: "V", columnOrder: "sideways" as any },
+    ]);
+    expect(bad.ok).toBe(false);
+  });
+
   it("validates chartColumns array and warns on unknown chart columns", () => {
     const r = validateChangeset(tables, [
       { op: "set_view", view: "V", table: "VĂN_BẢN", chartType: "pie", chartColumns: ["id", "ghost"] },
