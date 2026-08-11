@@ -1536,17 +1536,43 @@ async function afOpenTableSettings(tableName: string): Promise<string | null> {
   }
   if (!tableEl) return `không thấy bảng "${tableName}" trong cây Data`;
 
-  // Click to select (renders the row's action buttons).
-  ttClick(tableEl.querySelector(".MuiTreeItem-content") || tableEl);
-  await ttSleep(350);
+  // Click to select, then reveal the row's ⋮ "More" button (hover-gated).
+  const content = tableEl.querySelector(".MuiTreeItem-content") || tableEl;
+  ttClick(content);
+  await ttSleep(300);
+  ["pointerover", "mouseover", "mouseenter"].forEach((ev) =>
+    (content as HTMLElement).dispatchEvent(new MouseEvent(ev, { bubbles: true, cancelable: true, view: window })),
+  );
+  await ttSleep(150);
 
-  // Find & click "Table settings". Prefer the exact title; fall back to a
-  // button/aria-label containing "settings" scoped to the selected row.
-  let settingsBtn: Element | null =
-    document.querySelector('button[title="Table settings"]') ||
-    tableEl.querySelector('button[title*="ettings"], button[aria-label*="ettings"]');
-  if (!settingsBtn) return `không thấy nút "Table settings" cho ${tableName}`;
-  ttClick(settingsBtn as HTMLElement);
+  // Open "Table settings". Newer editors moved it from a direct per-row button
+  // into the ⋮ "More" overflow menu; try the legacy direct button first, then
+  // the menu.
+  const directBtn =
+    document.querySelector<HTMLElement>('button[title="Table settings"]') ||
+    tableEl.querySelector<HTMLElement>('button[title*="ettings"], button[aria-label*="ettings"]');
+  if (directBtn) {
+    ttClick(directBtn);
+  } else {
+    const more = Array.from(tableEl.querySelectorAll<HTMLElement>("button")).find((b) =>
+      /^\s*more\s*$/i.test(b.getAttribute("title") || b.getAttribute("aria-label") || ""),
+    );
+    if (!more) return `không thấy nút "Table settings"/"More" cho ${tableName}`;
+    ttClick(more);
+    // Wait for the menu, then click the "Table settings" item.
+    let item: HTMLElement | null = null;
+    const t0m = performance.now();
+    while (performance.now() - t0m < 2500) {
+      item =
+        Array.from(document.querySelectorAll<HTMLElement>('li[role="menuitem"], .MuiMenuItem-root')).find((li) =>
+          /^\s*table settings\s*$/i.test((li.textContent || "").trim()),
+        ) || null;
+      if (item) break;
+      await ttSleep(90);
+    }
+    if (!item) return `không thấy mục "Table settings" trong menu ⋮ cho ${tableName}`;
+    ttClick(item);
+  }
 
   // Wait for the dialog + its Security-filter/UpdateMode control to render.
   const t0 = performance.now();
