@@ -847,23 +847,26 @@ async function afFillSet(ch: Change): Promise<OpResult> {
   };
 }
 
-/** Trigger "Add virtual column". The columns-panel toolbar is RESPONSIVE: when
- *  wide it shows a direct `button[title="Add virtual column"]`, but with our
- *  sidebar open the editor is narrow and that "+" collapses into the panel's ⋮
- *  overflow menu — so the direct button simply isn't in the DOM. Try the direct
- *  button first; otherwise open the ⋮ menu and click the "Add virtual column"
- *  menu item. The ⋮ leaves no aria-expanded trace, so we identify it by result:
- *  click header icon buttons (rightmost first — ⋮ sits there) until the menu
- *  item appears, Escaping any wrong menu we opened. */
-async function afClickAddVcol(): Promise<boolean> {
-  const direct = document.querySelector<HTMLElement>('button[title="Add virtual column"]');
-  if (direct) {
-    ttClick(direct);
-    return true;
+/** Open the COLUMNS-PANEL header ⋮ overflow menu (the one above the columns grid
+ *  for the open table — "Add virtual column / Table settings / Preview data / …")
+ *  and click the item matching `itemRe`. This is NOT the data-tree row ⋮ ("View
+ *  data source / Rename / Delete"), which has no Table settings.
+ *
+ *  The panel toolbar is RESPONSIVE: wide shows direct buttons (pass `directSel`
+ *  to try one first), narrow (our sidebar open) collapses them into the ⋮. The ⋮
+ *  leaves no aria-expanded trace, so we click header icon buttons (rightmost
+ *  first — ⋮ sits there) until the target item appears, Escaping wrong menus. */
+async function afColumnsPanelMenu(itemRe: RegExp, directSel?: string): Promise<boolean> {
+  if (directSel) {
+    const direct = document.querySelector<HTMLElement>(directSel);
+    if (direct) {
+      ttClick(direct);
+      return true;
+    }
   }
   const findItem = () =>
     Array.from(document.querySelectorAll<HTMLElement>('li[role="menuitem"], .MuiMenuItem-root')).find((li) =>
-      /^\s*add virtual column\s*$/i.test((li.textContent || "").trim()),
+      itemRe.test((li.textContent || "").trim()),
     ) || null;
 
   const colsLabel = Array.from(document.querySelectorAll<HTMLElement>("*")).find(
@@ -898,6 +901,11 @@ async function afClickAddVcol(): Promise<boolean> {
     await ttSleep(120);
   }
   return false;
+}
+
+/** Trigger "Add virtual column" via the columns-panel ⋮ (direct "+" when wide). */
+async function afClickAddVcol(): Promise<boolean> {
+  return afColumnsPanelMenu(/^\s*add virtual column\s*$/i, 'button[title="Add virtual column"]');
 }
 
 /** Create a virtual column: Data → open table → "Add virtual column" → fill the
@@ -1516,63 +1524,16 @@ async function afOpenTableSettings(tableName: string): Promise<string | null> {
   if (afSettingsDialogOpen()) return null;
 
   if (!(await afGotoSection("data"))) return "không vào được mục Data";
-  await ttSleep(400);
-
-  // Find the table's tree item. Match on the label node's own text (textContent
-  // of the whole row includes nested column names when the item is expanded).
-  // Tables with slices/children render a count suffix e.g. "CHI_CT (2)", so an
-  // exact-text match silently failed for them — strip a trailing "(<digits>)"
-  // before comparing (same normalization ttOpenTable uses on the columns tree).
-  const norm = (s: string) =>
-    String(s || "").replace(/\s*\(\d+\)\s*$/, "").trim().toLowerCase();
-  const target = norm(tableName);
-  let tableEl: Element | null = null;
-  for (const t of document.querySelectorAll(".MuiTreeItem-root")) {
-    const label = t.querySelector(".MuiTreeItem-label") || t.querySelector(".MuiTreeItem-content");
-    if (label && norm(label.textContent) === target) {
-      tableEl = t;
-      break;
-    }
-  }
-  if (!tableEl) return `không thấy bảng "${tableName}" trong cây Data`;
-
-  // Click to select, then reveal the row's ⋮ "More" button (hover-gated).
-  const content = tableEl.querySelector(".MuiTreeItem-content") || tableEl;
-  ttClick(content);
+  // OPEN the table in the columns editor first (shows "Table: <name>" + the
+  // columns grid + the panel's ⋮). "Table settings" lives in that columns-panel
+  // ⋮ menu — NOT the data-tree row ⋮ (which only has View data source / Rename /
+  // Delete). ttOpenTable is the proven open-by-name used across the engine.
+  if (!(await ttOpenTable(tableName))) return `không mở được bảng "${tableName}"`;
   await ttSleep(300);
-  ["pointerover", "mouseover", "mouseenter"].forEach((ev) =>
-    (content as HTMLElement).dispatchEvent(new MouseEvent(ev, { bubbles: true, cancelable: true, view: window })),
-  );
-  await ttSleep(150);
 
-  // Open "Table settings". Newer editors moved it from a direct per-row button
-  // into the ⋮ "More" overflow menu; try the legacy direct button first, then
-  // the menu.
-  const directBtn =
-    document.querySelector<HTMLElement>('button[title="Table settings"]') ||
-    tableEl.querySelector<HTMLElement>('button[title*="ettings"], button[aria-label*="ettings"]');
-  if (directBtn) {
-    ttClick(directBtn);
-  } else {
-    const more = Array.from(tableEl.querySelectorAll<HTMLElement>("button")).find((b) =>
-      /^\s*more\s*$/i.test(b.getAttribute("title") || b.getAttribute("aria-label") || ""),
-    );
-    if (!more) return `không thấy nút "Table settings"/"More" cho ${tableName}`;
-    ttClick(more);
-    // Wait for the menu, then click the "Table settings" item.
-    let item: HTMLElement | null = null;
-    const t0m = performance.now();
-    while (performance.now() - t0m < 2500) {
-      item =
-        Array.from(document.querySelectorAll<HTMLElement>('li[role="menuitem"], .MuiMenuItem-root')).find((li) =>
-          /^\s*table settings\s*$/i.test((li.textContent || "").trim()),
-        ) || null;
-      if (item) break;
-      await ttSleep(90);
-    }
-    if (!item) return `không thấy mục "Table settings" trong menu ⋮ cho ${tableName}`;
-    ttClick(item);
-  }
+  // Click "Table settings" from the columns-panel ⋮ overflow menu.
+  if (!(await afColumnsPanelMenu(/^\s*table settings\s*$/i)))
+    return `không thấy mục "Table settings" cho ${tableName}`;
 
   // Wait for the dialog + its Security-filter/UpdateMode control to render.
   const t0 = performance.now();
