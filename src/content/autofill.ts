@@ -668,47 +668,73 @@ async function afSetPanelProp(panel: Element, label: string, value: string): Pro
 }
 
 /** Set Enum/EnumList values via the "Values" OrderedList control in the column editor.
- *  Clicks the ordered list, fills each value, and saves. Returns true if all values added. */
+ *  Structure: .OrderedListControl > .ListItems (rows) + .ListAddItem button ("Add").
+ *  Each row is a .ListItem with an input.MuiInputBase-input; the row's committed
+ *  value lands on the parent .TextControl[data-value] only after a blur.
+ *
+ *  Flow (verified live against the editor): for each value — NATIVE click on Add
+ *  (React's onClick ignores synthetic ttClick, same as the flask toggle), wait for
+ *  the new row's input to appear at the END of .ListItems, then focus → native
+ *  value setter → input/change → blur. The blur is what commits the value to the
+ *  React model (data-value). Verify via data-value, not just input.value. */
 async function afSetEnumValues(panel: Element, values: string[]): Promise<boolean> {
   if (!values || !values.length) return true;
+
   const ctrl = panel.querySelector<HTMLElement>('.FormControl[data-label="Values"]');
   if (!ctrl) return false;
-  const orderedList = ctrl.querySelector<HTMLElement>(".OrderedList");
+  const orderedList = ctrl.querySelector<HTMLElement>(".OrderedListControl");
   if (!orderedList) return false;
+  const listItems = orderedList.querySelector<HTMLElement>(".ListItems");
+  const addBtn = orderedList.querySelector<HTMLButtonElement>("button.ListAddItem");
+  if (!listItems || !addBtn) return false;
 
-  // Click into the ordered list to start adding values
-  const addBtn = orderedList.querySelector<HTMLElement>("button") || orderedList;
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  const rowInputs = () =>
+    Array.from(listItems.querySelectorAll<HTMLInputElement>("input.MuiInputBase-input, input[type=text]")).filter(
+      (i) => i.offsetParent !== null,
+    );
+
   let allOk = true;
-
   for (const val of values) {
     const trimmed = String(val).trim();
     if (!trimmed) continue;
 
-    // Look for an input to type into, or click "Add" button
-    const input = orderedList.querySelector<HTMLInputElement>("input:not(.IconListSearch input)");
-    if (input) {
-      if (!afSetText(input, trimmed)) {
-        allOk = false;
-        continue;
+    const before = rowInputs().length;
+    addBtn.click(); // NATIVE click — synthetic ttClick does not trigger React onClick
+
+    // Wait for a NEW row's input to appear at the END of the list.
+    let input: HTMLInputElement | null = null;
+    for (let i = 0; i < 25; i++) {
+      const inputs = rowInputs();
+      if (inputs.length > before) {
+        input = inputs[inputs.length - 1];
+        break;
       }
-      // Press Enter to confirm the value and add the next
-      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      await ttSleep(200);
-    } else {
-      // Try clicking an "Add" button if visible
-      const addItem = orderedList.querySelector<HTMLElement>("button[aria-label*='Add'], button[aria-label*='add'], button:not(.MuiIconButton-colorPrimary)");
-      if (addItem) {
-        ttClick(addItem);
-        await ttSleep(150);
-        const freshInput = orderedList.querySelector<HTMLInputElement>("input:not(.IconListSearch input)");
-        if (freshInput && !afSetText(freshInput, trimmed)) {
-          allOk = false;
-        }
-      } else {
-        allOk = false;
-      }
+      await ttSleep(60);
     }
+    if (!input) {
+      allOk = false;
+      continue;
+    }
+
+    // Focus → native setter → input/change → blur (blur commits to data-value).
+    input.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+    input.focus();
+    if (setter) setter.call(input, trimmed);
+    else input.value = trimmed;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+    input.blur();
+    input.dispatchEvent(new Event("blur", { bubbles: true }));
+    input.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+    await ttSleep(200);
+
+    // Verify against the COMMITTED value on the row's .TextControl[data-value].
+    const row = input.closest<HTMLElement>(".ListItem");
+    const committed = row?.querySelector(".TextControl")?.getAttribute("data-value") ?? "";
+    if (!ttSame(committed.trim(), trimmed)) allOk = false;
   }
+
   return allOk;
 }
 
