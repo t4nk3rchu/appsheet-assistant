@@ -667,6 +667,51 @@ async function afSetPanelProp(panel: Element, label: string, value: string): Pro
   return false;
 }
 
+/** Set Enum/EnumList values via the "Values" OrderedList control in the column editor.
+ *  Clicks the ordered list, fills each value, and saves. Returns true if all values added. */
+async function afSetEnumValues(panel: Element, values: string[]): Promise<boolean> {
+  if (!values || !values.length) return true;
+  const ctrl = panel.querySelector<HTMLElement>('.FormControl[data-label="Values"]');
+  if (!ctrl) return false;
+  const orderedList = ctrl.querySelector<HTMLElement>(".OrderedList");
+  if (!orderedList) return false;
+
+  // Click into the ordered list to start adding values
+  const addBtn = orderedList.querySelector<HTMLElement>("button") || orderedList;
+  let allOk = true;
+
+  for (const val of values) {
+    const trimmed = String(val).trim();
+    if (!trimmed) continue;
+
+    // Look for an input to type into, or click "Add" button
+    const input = orderedList.querySelector<HTMLInputElement>("input:not(.IconListSearch input)");
+    if (input) {
+      if (!afSetText(input, trimmed)) {
+        allOk = false;
+        continue;
+      }
+      // Press Enter to confirm the value and add the next
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      await ttSleep(200);
+    } else {
+      // Try clicking an "Add" button if visible
+      const addItem = orderedList.querySelector<HTMLElement>("button[aria-label*='Add'], button[aria-label*='add'], button:not(.MuiIconButton-colorPrimary)");
+      if (addItem) {
+        ttClick(addItem);
+        await ttSleep(150);
+        const freshInput = orderedList.querySelector<HTMLInputElement>("input:not(.IconListSearch input)");
+        if (freshInput && !afSetText(freshInput, trimmed)) {
+          allOk = false;
+        }
+      } else {
+        allOk = false;
+      }
+    }
+  }
+  return allOk;
+}
+
 /** Best-effort switch to the Data / UX / Behavior area of the editor (source afGotoSection ~9440). */
 async function afGotoSection(kind: "data" | "ux" | "behavior"): Promise<boolean> {
   const present = {
@@ -796,11 +841,11 @@ async function afFillSet(ch: Change): Promise<OpResult> {
   const panelFields = ["validIf", "suggestedValues", "resetIf"].filter(
     (k) => chAny[k] != null && chAny[k] !== "",
   );
-  // Base type / Referenced table name live only in the column editor panel, and
+  // Base type / Referenced table name / enum values live only in the column editor panel, and
   // appear progressively (Base type needs Type=Enum/EnumList; Referenced table
   // needs Base type=Ref). Type was already set via the grid above.
   const propEntries = ch.properties ? Object.entries(ch.properties) : [];
-  const needsPanel = panelFields.length || ch.baseType || ch.referencedTable || propEntries.length;
+  const needsPanel = panelFields.length || ch.baseType || ch.referencedTable || ch.enumerationList || propEntries.length;
   if (needsPanel) {
     const panel = await afOpenEditor(
       ch.table!,
@@ -816,6 +861,10 @@ async function afFillSet(ch: Change): Promise<OpResult> {
       if (ch.referencedTable) {
         if (!(await afSetRefTable(panel, ch.referencedTable))) failed.push("referencedTable");
         await ttSleep(200);
+      }
+      if (ch.enumerationList) {
+        if (!(await afSetEnumValues(panel, ch.enumerationList))) failed.push("enumerationList");
+        await ttSleep(250);
       }
       for (const k of panelFields) {
         const ok = EXPR_FIELDS.indexOf(k) >= 0 ? await afSetExpr(panel, k, chAny[k]) : await afSetSwitch(panel, k, chAny[k]);
@@ -837,6 +886,7 @@ async function afFillSet(ch: Change): Promise<OpResult> {
       panelFields.forEach((k) => failed.push(k + " (cần mở editor)"));
       if (ch.baseType) failed.push("baseType (cần mở editor)");
       if (ch.referencedTable) failed.push("referencedTable (cần mở editor)");
+      if (ch.enumerationList) failed.push("enumerationList (cần mở editor)");
       propEntries.forEach(([label]) => failed.push(`prop:${label} (cần mở editor)`));
     }
   }
@@ -948,6 +998,10 @@ async function afFillAdd(ch: Change): Promise<OpResult> {
   if (ch.referencedTable) {
     if (!(await afSetRefTable(panel, ch.referencedTable))) failed.push("referencedTable");
     await ttSleep(200);
+  }
+  if (ch.enumerationList) {
+    if (!(await afSetEnumValues(panel, ch.enumerationList))) failed.push("enumerationList");
+    await ttSleep(250);
   }
   if (ch.validIf && !(await afSetExpr(panel, "validIf", ch.validIf))) failed.push("validIf");
   if (ch.showIf && !(await afSetSwitch(panel, "showIf", ch.showIf))) failed.push("showIf");

@@ -132,6 +132,7 @@ Return ONLY a single JSON object. No markdown fences, no prose, no comments. Sha
       "type": "Text|Number|Decimal|Ref|Enum|EnumList|Date|DateTime|Yes/No|Price|Percent|...",
       "baseType": "Enum/EnumList base type, e.g. Ref (set_column)",
       "referencedTable": "existing table the Ref points to (set_column, when type/baseType is Ref)",
+      "enumerationList": ["value1", "value2", "..."] + "(Enum/EnumList with Text base type)",
       "properties": { "Exact Column-editor Label": "value" },
       "appFormula": "AppSheet expression", "initialValue": "AppSheet expression",
       "suggestedValues": "AppSheet expression", "validIf": "AppSheet expression",
@@ -153,8 +154,8 @@ Return ONLY a single JSON object. No markdown fences, no prose, no comments. Sha
 }
 
 ## Rules
-- op "set_column" requires "table" and an EXISTING "column". Optional: appFormula, initialValue, suggestedValues, validIf, type, baseType, referencedTable, displayName, showIf, editableIf, requireIf, resetIf.
-- TYPE-SPECIFIC PROPERTIES: use "properties" — an object keyed by the property's EXACT label. ONLY use labels listed for the column's type in the catalog below; never invent a label. Values: string for numbers/text, "true"/"false" for (true/false) props, or one of the listed options for enum props. For a Ref target table use the "referencedTable" field (NOT properties); for Enum/EnumList base type use "baseType". Works with set_column and add_virtual_column.
+- op "set_column" requires "table" and an EXISTING "column". Optional: appFormula, initialValue, suggestedValues, validIf, type, baseType, referencedTable, enumerationList, displayName, showIf, editableIf, requireIf, resetIf.
+- TYPE-SPECIFIC PROPERTIES: use "properties" — an object keyed by the property's EXACT label. ONLY use labels listed for the column's type in the catalog below; never invent a label. Values: string for numbers/text, "true"/"false" for (true/false) props, or one of the listed options for enum props. For a Ref target table use the "referencedTable" field (NOT properties); for Enum/EnumList base type use "baseType" + optionally "enumerationList" for the Text-base values. Works with set_column and add_virtual_column.
 
 ## Column type-specific properties (per type — use labels VERBATIM)
 ${renderColumnTypeProps()}

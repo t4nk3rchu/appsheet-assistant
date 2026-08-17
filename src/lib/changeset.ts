@@ -62,6 +62,7 @@ export interface Change {
   type?: string;
   baseType?: string; // Enum/EnumList base (element) type, e.g. "Ref"
   referencedTable?: string; // when baseType/type is Ref: the table it points to
+  enumerationList?: string[]; // Enum/EnumList values (Text base type)
   // Escape-hatch: any type-specific column-editor property, keyed by its exact
   // panel data-label (e.g. {"Max value":"100","Show as":"Thermometer"}).
   properties?: Record<string, string>;
@@ -407,6 +408,18 @@ export function validateChangeset(tables: Table[], changes: unknown): Validation
     if (!ch.referencedTable) delete ch.referencedTable;
     else if (typeof ch.referencedTable !== "string") add(i, "error", "'referencedTable' phải là chuỗi.");
     else if (tableNames.size && !tableNames.has(ch.referencedTable)) add(i, "error", `referencedTable không tồn tại: ${ch.referencedTable}`);
+    if (ch.enumerationList != null) {
+      if (!Array.isArray(ch.enumerationList)) {
+        add(i, "error", "'enumerationList' phải là mảng giá trị.");
+        delete ch.enumerationList;
+      } else if (ch.enumerationList.length === 0) {
+        delete ch.enumerationList;
+      } else {
+        const filtered = ch.enumerationList.filter((v) => v != null && String(v).trim() !== "");
+        if (filtered.length) ch.enumerationList = filtered;
+        else delete ch.enumerationList;
+      }
+    }
     normProperties(ch, i);
     if (ch.properties) validateColumnProperties(ch.type || colType(ch.table!, ch.column!), ch.properties).forEach((m) => add(i, "warn", m));
     norm.push(ch);
