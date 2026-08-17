@@ -1,7 +1,7 @@
 // src/sidebar/Sidebar.tsx — sidebar shell: header (brand, language, theme,
 // settings), the tool tab strip, the active tool, and a footer. Owns the
 // settings/theme/language state and shares it down to the tabs.
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { getSettings, saveSettings, getSkills, saveSkills, type Settings } from "../lib/storage";
 import { parseSkill, parseSkillZip, type Skill } from "../lib/skills";
 import { getTables, type Table } from "../lib/appsheet";
@@ -109,8 +109,23 @@ export function Sidebar() {
     if (s) document.documentElement.dataset.theme = s.darkMode ? "dark" : "light";
   }, [s?.darkMode]);
 
-  // Read the live table/column list once the sidebar opens over an editor tab.
-  useEffect(() => { getTables().then(setTables).catch(() => setTables([])); }, []);
+  // Read the live table/column list, and REFRESH it whenever the sidebar regains
+  // focus or becomes visible — the user may have added/renamed a table in the
+  // editor since it was last read. (Previously fetched once on mount, so new
+  // tables weren't seen until the sidebar was closed and reopened.)
+  const refreshTables = useCallback(() => {
+    getTables().then(setTables).catch(() => {});
+  }, []);
+  useEffect(() => {
+    refreshTables();
+    const onVis = () => { if (document.visibilityState === "visible") refreshTables(); };
+    window.addEventListener("focus", refreshTables);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("focus", refreshTables);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, [refreshTables]);
 
   if (!s) return null;
   const t = dict(s.lang);
@@ -139,7 +154,7 @@ export function Sidebar() {
           <button
             key={tab.id}
             className={`tab ${!settingsOpen && active === tab.id ? "active" : ""}`}
-            onClick={() => { setSettingsOpen(false); setActive(tab.id); }}
+            onClick={() => { setSettingsOpen(false); setActive(tab.id); refreshTables(); }}
           >
             {t[tab.label]}
           </button>

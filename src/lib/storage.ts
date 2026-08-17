@@ -32,7 +32,10 @@ export async function listBackups(): Promise<Backup[]> {
 }
 export async function saveBackup(b: Backup): Promise<void> {
   const all = await listBackups();
-  await browser.storage.local.set({ [B_KEY]: [b, ...all].slice(0, 20) }); // ponytail: cap at 20 backups
+  // ponytail: cap at 5. Each backup is a full appTemplate (~MB); this read-all +
+  // write-all runs off the Apply critical path (see applyChangeset), and 5 keeps
+  // the background write small. Bump if more history is needed.
+  await browser.storage.local.set({ [B_KEY]: [b, ...all].slice(0, 5) });
 }
 export async function getSkills(): Promise<Skill[]> {
   const got = (await browser.storage.local.get(SK_KEY)) as any;
