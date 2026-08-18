@@ -171,6 +171,19 @@ export function validateChangeset(tables: Table[], changes: unknown): Validation
   }
 
   const tableNames = new Set(tables.map((t) => t.name));
+  // A view's "For this data" can be a table OR a slice. Slices aren't in the
+  // live schema we get, but a changeset that uses one usually creates it via an
+  // add_slice op in the same batch — collect those names and map each to its
+  // source table so views can bind to them and column checks still resolve.
+  // ponytail: in-batch slices only; pre-existing app slices aren't in `tables`,
+  // so a view on a slice created in a prior run still errors — add slice
+  // extraction to tables.ts if that case shows up.
+  const sliceSource = new Map<string, string>();
+  for (const raw of changes as any[]) {
+    if (raw && raw.op === "add_slice" && raw.name) sliceSource.set(String(raw.name), String(raw.table ?? ""));
+  }
+  const isViewDataSource = (n: string) => tableNames.has(n) || sliceSource.has(n);
+  const resolveTable = (n: string) => sliceSource.get(n) ?? n; // slice → source table for column lookups
   const colSet = (t: string) => new Set((tables.find((x) => x.name === t)?.columns ?? []).map((c) => c.name.toLowerCase()));
   const colType = (t: string, c: string) =>
     tables.find((x) => x.name === t)?.columns.find((x) => x.name.toLowerCase() === String(c).toLowerCase())?.type;
@@ -285,7 +298,7 @@ export function validateChangeset(tables: Table[], changes: unknown): Validation
       } else if (!ch.view) {
         return add(i, "error", "set_view thiếu 'view' (tên view cần sửa).");
       }
-      if (ch.table && tableNames.size && !tableNames.has(ch.table)) return add(i, "error", `Bảng không tồn tại: ${ch.table}`);
+      if (ch.table && tableNames.size && !isViewDataSource(ch.table)) return add(i, "error", `Bảng/Slice không tồn tại: ${ch.table}`);
       if (ch.viewType && VIEW_TYPES.indexOf(String(ch.viewType)) < 0) return add(i, "error", `viewType không hợp lệ: ${ch.viewType}`);
       if (ch.position && VIEW_POSITIONS.indexOf(String(ch.position)) < 0) return add(i, "error", `position không hợp lệ: ${ch.position}`);
       for (const f of ["showIf", "displayName", "groupAggregate", "icon"] as const) {
@@ -295,7 +308,7 @@ export function validateChangeset(tables: Table[], changes: unknown): Validation
       }
       // Sort by / Group by: arrays of {column, order?}. Normalize order to
       // Ascending/Descending; warn (not block) on columns missing from the table.
-      const cs = ch.table && tableNames.has(ch.table) ? colSet(ch.table) : null;
+      const cs = ch.table && tableNames.has(resolveTable(ch.table)) ? colSet(resolveTable(ch.table)) : null;
       for (const f of ["sortBy", "groupBy"] as const) {
         const v = (ch as any)[f];
         if (v == null) continue;
@@ -343,7 +356,7 @@ export function validateChangeset(tables: Table[], changes: unknown): Validation
           add(i, "error", "'chartColumns' phải là mảng tên cột.");
           delete ch.chartColumns;
         } else {
-          const cs2 = ch.table && tableNames.has(ch.table) ? colSet(ch.table) : null;
+          const cs2 = ch.table && tableNames.has(resolveTable(ch.table)) ? colSet(resolveTable(ch.table)) : null;
           ch.chartColumns.forEach((cn) => {
             if (cs2 && !cs2.has(String(cn).toLowerCase())) add(i, "warn", `chartColumns: cột không có trong ${ch.table}: ${cn}`);
           });

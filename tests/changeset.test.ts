@@ -100,6 +100,23 @@ describe("validateChangeset", () => {
     expect(r.issues.filter((i) => i.level === "error").length).toBeGreaterThanOrEqual(4);
   });
 
+  it("accepts a view bound to a slice created earlier in the same changeset", () => {
+    const r = validateChangeset(tables, [
+      { op: "add_slice", table: "VĂN_BẢN", name: "PENDING", rowFilter: "true" },
+      { op: "add_view", name: "Pending List", table: "PENDING", viewType: "table", position: "menu" },
+    ]);
+    expect(r.ok).toBe(true);
+    expect(r.normalized).toHaveLength(2);
+  });
+
+  it("still errors when a view binds to a name that is neither table nor slice", () => {
+    const r = validateChangeset(tables, [
+      { op: "add_view", name: "Ghost", table: "NOT_A_TABLE", viewType: "table" },
+    ]);
+    expect(r.ok).toBe(false);
+    expect(r.issues.some((i) => i.level === "error" && i.msg.includes("NOT_A_TABLE"))).toBe(true);
+  });
+
   it("accepts a dashboard add_view without table and normalizes viewEntries", () => {
     const r = validateChangeset(tables, [
       {
