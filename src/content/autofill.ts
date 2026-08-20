@@ -2584,15 +2584,22 @@ function afLastStepCard(): Element | null {
   return cards.length ? cards[cards.length - 1] : null;
 }
 
-/** Set the selected step's name — the first <textarea> in the step card. */
-function afSetStepName(name: string): boolean {
-  const ta = afLastStepCard()?.querySelector<HTMLTextAreaElement>("textarea");
+/** Set the step's name — the first <textarea> in the step card. The card must be
+ *  selected/focused first or React reverts the controlled textarea on blur. */
+async function afSetStepName(name: string): Promise<boolean> {
+  const card = afLastStepCard();
+  if (!card) return false;
+  afHit(card as HTMLElement); // select the step
+  await ttSleep(300);
+  const ta = (afLastStepCard() || card).querySelector<HTMLTextAreaElement>("textarea");
   if (!ta) return false;
+  ta.focus();
   const d = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value");
   if (d?.set) d.set.call(ta, name);
   else ta.value = name;
   ta.dispatchEvent(new Event("input", { bubbles: true }));
   ta.dispatchEvent(new Event("change", { bubbles: true }));
+  ta.blur();
   ta.dispatchEvent(new Event("blur", { bubbles: true }));
   return true;
 }
@@ -2749,7 +2756,7 @@ async function afFillBot(ch: Change): Promise<OpResult> {
       await ttSleep(200);
     }
     if (st.name) {
-      afSetStepName(st.name);
+      await afSetStepName(st.name);
       await ttSleep(200);
     }
   }
