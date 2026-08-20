@@ -11,7 +11,7 @@ Automation **bot**: a data-change **event** plus a **process** of one or more
 In:
 - Event source = **Data change** only (Adds/Updates/Deletes/All), on a table or slice, with an optional condition and a "Bypass security filters?" toggle.
 - Process steps of one task type: **`run_a_data_action`**. Each step is one of two **modes**:
-  - **`existing`** (default) — the step's action dropdown ("Custom action" → …) is set to an **already-created action by name**. This is the general path: any action type (add row / delete / set values / grouped / ref) is created earlier via `add_action`, then picked here.
+  - **`existing`** (default) — the step's action dropdown ("Custom action" → …) is set to an **already-created action by name**. Only the name is needed; the action must belong to the **bot's event table** (the dropdown lists only that table's actions). This is the general path: any action type (add row / delete / set values / grouped / ref) is created earlier via `add_action`, then picked here.
   - **`custom`** — build a Custom action inline; v1 supports the **`run_action_on_rows`** custom type only (Referenced Table + Referenced rows + Referenced Action). This is the config shown in the reference screenshot.
 - Multiple steps per bot.
 - **Create only** (`add_bot`). No `set_bot` (edit) yet.
@@ -33,11 +33,12 @@ Out (later):
   "bypassSecurity": false,             // optional — "Bypass security filters?" toggle (default false)
   "steps": [                           // required — non-empty array
     // Mode "existing" (default): pick an already-created action from the step's dropdown.
+    // Only the action NAME is needed — the action must belong to the bot's event
+    // table (`table` above); its behaviour/target/rows are already defined by the
+    // add_action that created it. No other fields.
     {
       "type": "run_a_data_action",     // optional — defaults to "run_a_data_action"; other value = error in v1
-      "action": "R_VẬT_TƯ",            // required — name of an EXISTING action to select
-      "table":  "VẬT_TƯ",             // optional — Referenced Table (scopes the action dropdown's list)
-      "rows":   "[Related CHI_TIẾT_PHIẾU_KHOs][ref_vật_tư]", // optional — Referenced rows expression
+      "action": "R_VẬT_TƯ",            // required — name of an EXISTING action on the bot's table
       "name":   "Cập nhật vật tư"      // optional — step display name
     },
     // Mode "custom" run_action_on_rows: build the inline custom action (screenshot).
@@ -53,7 +54,7 @@ Out (later):
 }
 ```
 
-Step-mode discriminator: **`custom`** absent → `existing` mode (pick `action` from the dropdown). `custom: "run_action_on_rows"` → custom mode (inline Referenced Table/rows/Action). `action` is required in both modes and names an existing action.
+Step-mode discriminator: **`custom`** absent → `existing` mode — pick `action` from the step's dropdown; the action must exist on the bot's event `table`; `table`/`rows` are not used (ignored if present). `custom: "run_action_on_rows"` → custom mode — inline Referenced Table/rows/Action. `action` is required in both modes and names an existing action.
 
 ## Validation (`validateChangeset`)
 
@@ -65,8 +66,8 @@ Step-mode discriminator: **`custom`** absent → `existing` mode (pick `action` 
   - each `step.type` (if present) must equal `run_a_data_action` (else `step.type không hỗ trợ: <v> (chỉ 'run_a_data_action')`); default it to `run_a_data_action`.
   - `step.custom` optional; if present must equal `run_action_on_rows` (else `step.custom không hỗ trợ: <v> (chỉ 'run_action_on_rows')`). Absent ⇒ `existing` mode.
   - `step.action` required, string (an existing action name — the dropdown pick in `existing` mode, the Referenced Action in `custom` mode).
-  - `step.table` optional; warn if set and missing from `tableNames`.
-  - `step.rows` optional; string if present.
+  - `existing` mode: `table`/`rows` are not used — drop them silently (the action already carries its config, and it must live on the bot's event `table`).
+  - `custom` mode: `step.table` optional (warn if set and missing from `tableNames`); `step.rows` optional, string if present.
   - `step.name` optional; string if present.
 - Summary line: `add_bot  "<name>" @ <table>  (<n> steps)`.
 
@@ -79,7 +80,7 @@ Reuses existing primitives: `afMuiSelectSet`, `afSetExpression`, `ttSetSelect`, 
 3. Set **bot name** via the editable title/name input.
 4. **Configure event** (data change): ensure the event card exists (click "Configure event" if needed), select it, then set Event source = Change, `Table` (select), `Data change type`, `Condition` (`afSetExpression`), `Bypass security filters?` toggle.
 5. **Per step**: click **Add a step** → choose the "Run a data action" task type. Then by mode:
-   - **`existing`**: set `Referenced Table` first if given (scopes the list), then set the step's **action dropdown** (the "Custom action" MuiSelect) to `step.action` via `afMuiSelectSet`.
+   - **`existing`**: set the step's **action dropdown** (the "Custom action" MuiSelect) to `step.action` via `afMuiSelectSet` — the dropdown already lists the bot table's actions; nothing else to set.
    - **`custom` = run_action_on_rows**: select the **"Run action on rows"** task-type button in the right-pane toolbar (keep "Custom action"), then set `Referenced Table` (`afMuiSelectSet`), `Referenced Action` = `step.action` (`afMuiSelectSet`), `Referenced rows` (`afSetExpression`).
    - Set optional step name in both.
 6. Verify each field; return `OpResult { ok, reason }` with a `failed[]` list — the same honest-reporting pattern as every other op (no false success).
