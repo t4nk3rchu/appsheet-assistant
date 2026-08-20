@@ -18,7 +18,8 @@ export type ChangeOp =
   | "add_slice"
   | "set_slice"
   | "add_action"
-  | "set_action";
+  | "set_action"
+  | "add_bot";
 
 /** Valid AppSheet action types (source content.pretty.js ~8793). */
 export const ACTION_TYPES = [
@@ -118,6 +119,23 @@ export interface Change {
   target?: string; // NAVIGATE_APP/URL target expression
   needsConfirmation?: string; // "true"/"false"
   confirmationMessage?: string;
+  // add_bot — data-change automation. Reuses table (event table/slice),
+  // name (bot name), condition (event Condition).
+  dataChangeType?: string; // Adds only | Updates only | Deletes only | Adds and updates | All changes
+  bypassSecurity?: boolean; // "Bypass security filters?" toggle
+  steps?: BotStep[]; // process steps (run_a_data_action)
+}
+
+/** One process step in an add_bot bot. v1: type is always "run_a_data_action".
+ *  `custom` absent = pick an EXISTING action (by name) from the step's dropdown;
+ *  `custom: "run_action_on_rows"` = build the inline custom action (table+rows+action). */
+export interface BotStep {
+  type?: string; // "run_a_data_action" (default; only value in v1)
+  custom?: string; // "run_action_on_rows" (custom mode) | absent (existing-action mode)
+  action?: string; // existing action name (dropdown pick, or Referenced Action in custom mode)
+  table?: string; // custom mode: Referenced Table
+  rows?: string; // custom mode: Referenced rows expression
+  name?: string; // step display name
 }
 
 /** One row in a view's Sort by / Group by ordered list. */
@@ -403,6 +421,36 @@ export function validateChangeset(tables: Table[], changes: unknown): Validation
       return;
     }
 
+    if (ch.op === "add_bot") {
+      if (!ch.name) return add(i, "error", "add_bot thiếu 'name'.");
+      if (!ch.table) return add(i, "error", "add_bot thiếu 'table' (bảng của event).");
+      if (tableNames.size && !tableNames.has(ch.table)) return add(i, "error", `Bảng không tồn tại: ${ch.table}`);
+      if (ch.condition != null && typeof ch.condition !== "string") add(i, "error", "'condition' phải là chuỗi.");
+      if (!ch.condition) delete ch.condition;
+      const DCT = ["Adds only", "Updates only", "Deletes only", "Adds and updates", "All changes"];
+      if (ch.dataChangeType && !DCT.some((d) => d.toLowerCase() === String(ch.dataChangeType).toLowerCase()))
+        add(i, "warn", `dataChangeType không rõ: ${ch.dataChangeType} (mặc định All changes)`);
+      if (!Array.isArray(ch.steps) || ch.steps.length === 0) return add(i, "error", "add_bot cần ít nhất 1 step.");
+      ch.steps.forEach((s, si) => {
+        if (!s || typeof s !== "object") return add(i, "error", `step[${si}] không hợp lệ.`);
+        if (s.type && s.type !== "run_a_data_action")
+          add(i, "error", `step[${si}].type không hỗ trợ: ${s.type} (chỉ 'run_a_data_action')`);
+        s.type = "run_a_data_action";
+        if (s.custom && s.custom !== "run_action_on_rows")
+          add(i, "error", `step[${si}].custom không hỗ trợ: ${s.custom} (chỉ 'run_action_on_rows')`);
+        if (!s.action) return add(i, "error", `step[${si}] thiếu 'action'.`);
+        if (s.custom) {
+          if (s.table && tableNames.size && !tableNames.has(s.table)) add(i, "warn", `step[${si}].table không tồn tại: ${s.table}`);
+          if (s.rows != null && typeof s.rows !== "string") add(i, "error", `step[${si}].rows phải là chuỗi.`);
+        } else {
+          delete s.table; // existing mode: only the action name is needed
+          delete s.rows;
+        }
+      });
+      norm.push(ch);
+      return;
+    }
+
     if (ch.op !== "set_column") return add(i, "error", `op không hỗ trợ: ${ch.op}`);
     if (!ch.table) return add(i, "error", "set_column thiếu 'table'.");
     if (tableNames.size && !tableNames.has(ch.table)) return add(i, "error", `Bảng không tồn tại: ${ch.table}`);
@@ -464,5 +512,6 @@ export function summarize(ch: Change): string {
   }
   if (ch.op === "set_view") return `set_view  "${ch.view}"`;
   if (ch.op === "add_format_rule") return `add_format_rule  "${ch.name}" @ ${ch.table}`;
+  if (ch.op === "add_bot") return `add_bot  "${ch.name}" @ ${ch.table}  (${ch.steps?.length ?? 0} steps)`;
   return `set_format_rule  "${ch.rule}"`;
 }

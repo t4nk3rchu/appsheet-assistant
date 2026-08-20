@@ -277,3 +277,48 @@ describe("validateChangeset", () => {
     expect(summarize({ op: "set_column", table: "VĂN_BẢN", column: "trạng_thái", appFormula: "x" })).toContain("VĂN_BẢN.trạng_thái");
   });
 });
+
+describe("validateChangeset add_bot", () => {
+  it("accepts existing-mode steps and drops table/rows on them", () => {
+    const r = validateChangeset(tables, [
+      { op: "add_bot", table: "VĂN_BẢN", name: "B1", condition: '[trạng_thái]="x"',
+        steps: [{ action: "A1", table: "VĂN_BẢN", rows: "[Related X]" }] } as any,
+    ]);
+    expect(r.ok).toBe(true);
+    const s = (r.normalized[0] as any).steps[0];
+    expect(s.type).toBe("run_a_data_action"); // defaulted
+    expect(s.action).toBe("A1");
+    expect(s).not.toHaveProperty("table"); // existing mode drops these
+    expect(s).not.toHaveProperty("rows");
+  });
+
+  it("keeps table/rows for custom run_action_on_rows steps", () => {
+    const r = validateChangeset(tables, [
+      { op: "add_bot", table: "VĂN_BẢN", name: "B2",
+        steps: [{ custom: "run_action_on_rows", action: "A1", table: "VĂN_BẢN", rows: "[Related X]" }] } as any,
+    ]);
+    expect(r.ok).toBe(true);
+    const s = (r.normalized[0] as any).steps[0];
+    expect(s.custom).toBe("run_action_on_rows");
+    expect(s.table).toBe("VĂN_BẢN");
+    expect(s.rows).toBe("[Related X]");
+  });
+
+  it("rejects missing name/table/steps and empty steps", () => {
+    expect(validateChangeset(tables, [{ op: "add_bot", table: "VĂN_BẢN", steps: [{ action: "A" }] } as any]).ok).toBe(false);
+    expect(validateChangeset(tables, [{ op: "add_bot", name: "B", steps: [{ action: "A" }] } as any]).ok).toBe(false);
+    expect(validateChangeset(tables, [{ op: "add_bot", name: "B", table: "VĂN_BẢN" } as any]).ok).toBe(false);
+    expect(validateChangeset(tables, [{ op: "add_bot", name: "B", table: "VĂN_BẢN", steps: [] } as any]).ok).toBe(false);
+  });
+
+  it("rejects unknown table, bad step.type/custom, and step without action", () => {
+    expect(validateChangeset(tables, [{ op: "add_bot", name: "B", table: "NOPE", steps: [{ action: "A" }] } as any]).ok).toBe(false);
+    expect(validateChangeset(tables, [{ op: "add_bot", name: "B", table: "VĂN_BẢN", steps: [{ type: "send_email", action: "A" }] } as any]).ok).toBe(false);
+    expect(validateChangeset(tables, [{ op: "add_bot", name: "B", table: "VĂN_BẢN", steps: [{ custom: "add_rows", action: "A" }] } as any]).ok).toBe(false);
+    expect(validateChangeset(tables, [{ op: "add_bot", name: "B", table: "VĂN_BẢN", steps: [{ table: "VĂN_BẢN" }] } as any]).ok).toBe(false);
+  });
+
+  it("summarizes with step count", () => {
+    expect(summarize({ op: "add_bot", table: "VĂN_BẢN", name: "B", steps: [{ action: "A" }, { action: "B" }] } as any)).toContain("2 steps");
+  });
+});

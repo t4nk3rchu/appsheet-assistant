@@ -2476,6 +2476,199 @@ async function afFillAction(ch: Change): Promise<OpResult> {
 }
 
 /* ======================================================================
+ * add_bot apply — Automation → Bots (data-change event + run-a-data-action steps)
+ * ==================================================================== */
+
+/** Navigate to Automation → Bots via hash routing (mirrors afGotoFormatRules). */
+async function afGotoBots(): Promise<boolean> {
+  const ADD = 'button[aria-label="Create a new automation"], button[title="Create a new automation"]';
+  if (document.querySelector(ADD)) return true;
+  try {
+    if (!/Automation\.Bots/i.test(location.hash)) {
+      location.hash = "Automation.Bots";
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    }
+  } catch {
+    /* ignore */
+  }
+  return !!(await afWaitFor(ADD, 8000));
+}
+
+const afCtrl = (label: string): Element | null => document.querySelector(`.FormControl[data-label="${label}"]`);
+
+/** Set the bot's name. The title is an editable text node (not a plain input);
+ *  click it to reveal the input, then type. Best-effort. */
+async function afSetBotName(name: string): Promise<boolean> {
+  // an input may already be present (fresh bot)
+  const findInp = () =>
+    Array.from(document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea")).find(
+      (e) => e.offsetParent !== null && /New Bot|Bot name/i.test(e.value || e.getAttribute("placeholder") || ""),
+    ) || null;
+  let inp = findInp();
+  if (!inp) {
+    const title = Array.from(document.querySelectorAll<HTMLElement>("p, h1, h2, h3, div")).find(
+      (e) => e.children.length === 0 && e.offsetParent !== null && /^New Bot$/.test((e.textContent || "").trim()),
+    );
+    if (title) {
+      title.click();
+      await ttSleep(300);
+      inp = findInp() || (title.closest("*")?.querySelector<HTMLInputElement>("input") ?? null);
+    }
+  }
+  if (!inp) return false;
+  return afSetText(inp as HTMLInputElement, name);
+}
+
+/** Open + select the event card so its config renders in the right pane. */
+async function afOpenBotEvent(): Promise<boolean> {
+  let card = document.querySelector<HTMLElement>(".AutomationEventCard");
+  if (!card) {
+    const cfg = Array.from(document.querySelectorAll<HTMLElement>("button")).find(
+      (b) => b.offsetParent !== null && /configure event/i.test(b.textContent || ""),
+    );
+    if (cfg) {
+      cfg.click();
+      await ttSleep(700);
+    }
+    card = document.querySelector<HTMLElement>(".AutomationEventCard");
+  }
+  if (!card) return false;
+  card.click();
+  ttClick(card);
+  return !!(await afWaitFor('.FormControl[data-label="Table"]', 5000));
+}
+
+/** The most-recently-added process step card. */
+function afLastStepCard(): Element | null {
+  const cards = Array.from(document.querySelectorAll<HTMLElement>(".MuiCard-root.outlined-default.fullWidth")).filter(
+    (c) => c.offsetParent !== null,
+  );
+  return cards.length ? cards[cards.length - 1] : null;
+}
+
+/** Click a task-type tile (e.g. "Run action on rows") — a Typography span; React
+ *  delegates onClick so a native click on the span bubbles to the handler. */
+function afClickTaskTile(label: string): boolean {
+  const span = Array.from(document.querySelectorAll<HTMLElement>("span.MuiTypography-root")).find(
+    (e) => e.offsetParent !== null && (e.textContent || "").trim() === label,
+  );
+  if (!span) return false;
+  const tile = (span.closest("button, [role='button'], .MuiButtonBase-root") as HTMLElement) || span;
+  tile.click();
+  ttClick(tile);
+  return true;
+}
+
+/** Add one process step of type "Run a data action". */
+async function afBotAddStep(): Promise<boolean> {
+  const add = Array.from(document.querySelectorAll<HTMLElement>("button")).find(
+    (b) => b.offsetParent !== null && /^\s*add a step\s*$/i.test((b.textContent || "").trim()),
+  );
+  if (!add) return false;
+  add.click();
+  ttClick(add);
+  const t0 = performance.now();
+  for (;;) {
+    const item = Array.from(
+      document.querySelectorAll<HTMLElement>('[role="menuitem"], .MuiMenuItem-root, li, .MuiTypography-root'),
+    ).find((e) => e.offsetParent !== null && /^\s*run a data action\s*$/i.test((e.textContent || "").trim()));
+    if (item) {
+      item.click();
+      ttClick(item);
+      await ttSleep(700);
+      return true;
+    }
+    if (performance.now() - t0 > 4000) return false;
+    await ttSleep(120);
+  }
+}
+
+async function afFillBot(ch: Change): Promise<OpResult> {
+  const chAny = ch as any;
+  if (!(await afGotoBots())) return { ok: false, reason: "Không mở được Automation → Bots." };
+
+  const createBtn = document.querySelector<HTMLElement>(
+    'button[aria-label="Create a new automation"], button[title="Create a new automation"]',
+  );
+  if (!createBtn) return { ok: false, reason: "Không thấy nút Create a new automation." };
+  ttClick(createBtn);
+  const dlg = await afWaitFor(".MuiDialog-paper", 5000);
+  if (!dlg) return { ok: false, reason: "Dialog Add a new bot không mở." };
+  const createNew = Array.from(dlg.querySelectorAll("button")).find((b) =>
+    /^\s*create a new bot\s*$/i.test((b.textContent || "").trim()),
+  );
+  if (!createNew) return { ok: false, reason: 'Không thấy nút "Create a new bot".' };
+  ttClick(createNew);
+  await ttSleep(1300);
+
+  const failed: string[] = [];
+
+  if (ch.name && !(await afSetBotName(ch.name))) failed.push("name");
+
+  // Event (data change)
+  if (await afOpenBotEvent()) {
+    if (ch.table) {
+      const s = afCtrl("Table")?.querySelector<HTMLSelectElement>("select.dropdownSelect");
+      if (!(s && ttSetSelect(s, ch.table))) failed.push("table");
+      await ttSleep(250);
+    }
+    if (ch.condition) {
+      const inp = afCtrl("Condition")?.querySelector<HTMLInputElement>(EXPR_INP_SEL);
+      if (!(inp && (await afSetExpression(inp, ch.condition)))) failed.push("condition");
+      await ttSleep(200);
+    }
+    if (chAny.bypassSecurity) {
+      const cb = afCtrl("Bypass Security Filters?")?.querySelector(".CheckboxControl");
+      if (cb && cb.getAttribute("data-value") !== "true") {
+        ttClick(cb.querySelector<HTMLElement>("input[type=checkbox], .MuiButtonBase-root") || (cb as HTMLElement));
+        await ttSleep(150);
+      }
+    }
+    // ponytail: dataChangeType left at AppSheet's default. The control is 3
+    // checkboxes (Adds/Updates/Deletes); wire subset selection if a user needs
+    // a non-default set.
+    if (chAny.dataChangeType && !/all changes/i.test(chAny.dataChangeType)) failed.push("dataChangeType (để mặc định)");
+  } else {
+    failed.push("event");
+  }
+
+  // Process steps
+  for (const st of (ch.steps || []) as any[]) {
+    if (!(await afBotAddStep())) {
+      failed.push(`step:${st.action} (add)`);
+      continue;
+    }
+    if (st.custom === "run_action_on_rows") {
+      if (!afClickTaskTile("Run action on rows")) failed.push(`step:${st.action} (type)`);
+      await ttSleep(300);
+      if (st.table) {
+        const rt = afCtrl("Referenced Table")?.querySelector<HTMLElement>('.MuiSelect-select[role="button"]');
+        if (!(rt && (await afMuiSelectSet(rt, st.table)))) failed.push(`step:${st.action} (Referenced Table)`);
+        await ttSleep(200);
+      }
+      if (st.rows) {
+        const inp = afCtrl("Referenced rows")?.querySelector<HTMLInputElement>(EXPR_INP_SEL);
+        if (!(inp && (await afSetExpression(inp, st.rows)))) failed.push(`step:${st.action} (Referenced rows)`);
+        await ttSleep(200);
+      }
+      const ra = afCtrl("Referenced Action")?.querySelector<HTMLElement>('.MuiSelect-select[role="button"]');
+      if (!(ra && (await afMuiSelectSet(ra, st.action)))) failed.push(`step:${st.action} (Referenced Action)`);
+      await ttSleep(200);
+    } else {
+      // existing mode: set the step card's action dropdown ("Custom action") to the action
+      const sel = afLastStepCard()?.querySelector<HTMLElement>('.MuiSelect-select[role="button"]');
+      if (!(sel && (await afMuiSelectSet(sel, st.action)))) failed.push(`step:${st.action}`);
+      await ttSleep(200);
+    }
+  }
+
+  return {
+    ok: failed.length === 0,
+    reason: failed.length ? "Field chưa vào (kiểm tay): " + failed.join(", ") : "Đã tạo bot",
+  };
+}
+
+/* ======================================================================
  * editorReady + applyChanges dispatcher (source editorReady ~10557, afFill ~10507)
  * ==================================================================== */
 
@@ -2496,6 +2689,7 @@ function fillLabel(ch: Change): string {
   if (ch.op === "add_slice" || ch.op === "set_slice") return "slice " + (ch.name || ch.slice || "");
   if (ch.op === "add_action" || ch.op === "set_action") return "action " + (ch.name || (ch as any).action || "");
   if (ch.op === "add_format_rule" || ch.op === "set_format_rule") return "format rule " + (ch.name || ch.rule || "");
+  if (ch.op === "add_bot") return "bot " + (ch.name || "");
   return (ch.table || "") + "." + (ch.column || "");
 }
 
@@ -2526,6 +2720,8 @@ export async function applyChanges(changes: Change[]): Promise<FillResult[]> {
         r = await afFillAction(ch);
       } else if (ch.op === "add_format_rule" || ch.op === "set_format_rule") {
         r = await afFillFormatRule(ch);
+      } else if (ch.op === "add_bot") {
+        r = await afFillBot(ch);
       } else {
         results.push({ index: i, op, label, level: "error", detail: "op not supported yet" });
         continue;
