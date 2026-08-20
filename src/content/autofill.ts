@@ -2527,38 +2527,28 @@ function afHit(el: HTMLElement | null): boolean {
 /** Set the bot's name. The title is an editable text node (not a plain input);
  *  click it to reveal the input, then type. Best-effort. */
 async function afSetBotName(name: string): Promise<boolean> {
-  // an input may already be present (fresh bot)
-  const findInp = () =>
-    Array.from(document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>("input, textarea")).find(
-      (e) => e.offsetParent !== null && /New Bot|Bot name/i.test(e.value || e.getAttribute("placeholder") || ""),
-    ) || null;
-  let inp = findInp();
-  if (!inp) {
-    const title = Array.from(document.querySelectorAll<HTMLElement>("p, h1, h2, h3, div, span")).find(
-      (e) => e.children.length === 0 && e.offsetParent !== null && /^New Bot$/.test((e.textContent || "").trim()),
+  // Rename = double-click the bot's tree item (the just-created bot is the
+  // selected one) to reveal its inline input, type, commit with Enter+blur.
+  const item =
+    document.querySelector<HTMLElement>(".MuiTreeItem-content.Mui-selected") ||
+    Array.from(document.querySelectorAll<HTMLElement>(".MuiTreeItem-content")).find(
+      (e) => e.getAttribute("aria-selected") === "true",
+    ) ||
+    Array.from(document.querySelectorAll<HTMLElement>(".MuiTreeItem-label, .MuiTreeItem-content")).find(
+      (e) => /^New Bot\b/.test((e.textContent || "").trim()),
     );
-    if (title) {
-      // inline-editable title: a single click often just selects; try click then
-      // double-click to enter edit mode, polling for the input to appear.
-      afHit(title);
-      await ttSleep(250);
-      inp = findInp();
-      if (!inp) {
-        title.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, view: window }));
-        await ttSleep(300);
-        inp = findInp() || (title.closest("*")?.querySelector<HTMLInputElement>("input") ?? null);
-      }
-    }
-  }
+  if (!item) return false;
+  item.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, view: window }));
+  await ttSleep(500);
+  const inp = Array.from(document.querySelectorAll<HTMLInputElement>("input")).find(
+    (e) => e.offsetParent !== null && /^New Bot\b/.test(e.value || ""),
+  );
   if (!inp) return false;
-  const ce = (inp as HTMLElement).isContentEditable;
-  if (ce) {
-    (inp as HTMLElement).focus();
-    document.execCommand("selectAll", false, undefined);
-    document.execCommand("insertText", false, name);
-    return ((inp.textContent || "").trim() === name);
-  }
-  return afSetText(inp as HTMLInputElement, name);
+  const ok = afSetText(inp, name);
+  inp.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  inp.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true }));
+  await ttSleep(400);
+  return ok;
 }
 
 /** Configure the bot's event so its config renders in the right pane. Fresh bot:
@@ -2592,6 +2582,19 @@ function afLastStepCard(): Element | null {
     (c) => c.offsetParent !== null,
   );
   return cards.length ? cards[cards.length - 1] : null;
+}
+
+/** Set the selected step's name — the first <textarea> in the step card. */
+function afSetStepName(name: string): boolean {
+  const ta = afLastStepCard()?.querySelector<HTMLTextAreaElement>("textarea");
+  if (!ta) return false;
+  const d = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value");
+  if (d?.set) d.set.call(ta, name);
+  else ta.value = name;
+  ta.dispatchEvent(new Event("input", { bubbles: true }));
+  ta.dispatchEvent(new Event("change", { bubbles: true }));
+  ta.dispatchEvent(new Event("blur", { bubbles: true }));
+  return true;
 }
 
 /** Click a task-type tile (e.g. "Run action on rows") — a Typography span; React
@@ -2685,8 +2688,6 @@ async function afFillBot(ch: Change): Promise<OpResult> {
 
   const failed: string[] = [];
 
-  if (ch.name && !(await afSetBotName(ch.name))) failed.push("name");
-
   // Event (data change)
   if (await afOpenBotEvent()) {
     if (ch.table) {
@@ -2747,7 +2748,15 @@ async function afFillBot(ch: Change): Promise<OpResult> {
       if (!(actSel && (await afMuiSelectSet(actSel, st.action)))) failed.push(`step:${st.action}`);
       await ttSleep(200);
     }
+    if (st.name) {
+      afSetStepName(st.name);
+      await ttSleep(200);
+    }
   }
+
+  // Rename the bot LAST — doing it before configuring the event disrupts the
+  // "Create a new event" flow (the rename re-renders / steals focus).
+  if (ch.name && !(await afSetBotName(ch.name))) failed.push("name");
 
   return {
     ok: failed.length === 0,
