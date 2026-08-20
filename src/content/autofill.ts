@@ -2496,6 +2496,34 @@ async function afGotoBots(): Promise<boolean> {
 
 const afCtrl = (label: string): Element | null => document.querySelector(`.FormControl[data-label="${label}"]`);
 
+/** First visible element whose trimmed text exactly matches rx. */
+function afFindText(rx: RegExp, sel = 'button,[role="button"],a,li,div,span'): HTMLElement | null {
+  return (
+    Array.from(document.querySelectorAll<HTMLElement>(sel)).find(
+      (e) => e.offsetParent !== null && rx.test((e.textContent || "").trim()),
+    ) || null
+  );
+}
+
+/** Poll for afFindText until timeout. */
+async function afWaitForText(rx: RegExp, timeout = 3000, sel?: string): Promise<HTMLElement | null> {
+  const t0 = performance.now();
+  for (;;) {
+    const el = afFindText(rx, sel);
+    if (el) return el;
+    if (performance.now() - t0 > timeout) return null;
+    await ttSleep(120);
+  }
+}
+
+/** Click an element (native + synthetic, both bubble to React handlers). */
+function afHit(el: HTMLElement | null): boolean {
+  if (!el) return false;
+  el.click();
+  ttClick(el);
+  return true;
+}
+
 /** Set the bot's name. The title is an editable text node (not a plain input);
  *  click it to reveal the input, then type. Best-effort. */
 async function afSetBotName(name: string): Promise<boolean> {
@@ -2506,35 +2534,55 @@ async function afSetBotName(name: string): Promise<boolean> {
     ) || null;
   let inp = findInp();
   if (!inp) {
-    const title = Array.from(document.querySelectorAll<HTMLElement>("p, h1, h2, h3, div")).find(
+    const title = Array.from(document.querySelectorAll<HTMLElement>("p, h1, h2, h3, div, span")).find(
       (e) => e.children.length === 0 && e.offsetParent !== null && /^New Bot$/.test((e.textContent || "").trim()),
     );
     if (title) {
-      title.click();
-      await ttSleep(300);
-      inp = findInp() || (title.closest("*")?.querySelector<HTMLInputElement>("input") ?? null);
+      // inline-editable title: a single click often just selects; try click then
+      // double-click to enter edit mode, polling for the input to appear.
+      afHit(title);
+      await ttSleep(250);
+      inp = findInp();
+      if (!inp) {
+        title.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true, view: window }));
+        await ttSleep(300);
+        inp = findInp() || (title.closest("*")?.querySelector<HTMLInputElement>("input") ?? null);
+      }
     }
   }
   if (!inp) return false;
+  const ce = (inp as HTMLElement).isContentEditable;
+  if (ce) {
+    (inp as HTMLElement).focus();
+    document.execCommand("selectAll", false, undefined);
+    document.execCommand("insertText", false, name);
+    return ((inp.textContent || "").trim() === name);
+  }
   return afSetText(inp as HTMLInputElement, name);
 }
 
-/** Open + select the event card so its config renders in the right pane. */
+/** Configure the bot's event so its config renders in the right pane. Fresh bot:
+ *  "Configure event" → suggestions popup → "Create a new event" (same "Create a
+ *  new X" pattern as bots/views/slices). Already-configured: click the event card. */
 async function afOpenBotEvent(): Promise<boolean> {
-  let card = document.querySelector<HTMLElement>(".AutomationEventCard");
-  if (!card) {
-    const cfg = Array.from(document.querySelectorAll<HTMLElement>("button")).find(
-      (b) => b.offsetParent !== null && /configure event/i.test(b.textContent || ""),
-    );
-    if (cfg) {
-      cfg.click();
-      await ttSleep(700);
+  if (afCtrl("Table")) return true;
+  const cfg = afFindText(/^\s*configure event\s*$/i, "button");
+  if (cfg) {
+    afHit(cfg);
+    await ttSleep(700);
+  } else {
+    const card = document.querySelector<HTMLElement>(".AutomationEventCard");
+    if (card) {
+      afHit(card);
+      await ttSleep(500);
     }
-    card = document.querySelector<HTMLElement>(".AutomationEventCard");
   }
-  if (!card) return false;
-  card.click();
-  ttClick(card);
+  // suggestions popup → "Create a new event"
+  const cne = await afWaitForText(/^\s*create a new event\s*$/i, 2500);
+  if (cne) {
+    afHit(cne);
+    await ttSleep(900);
+  }
   return !!(await afWaitFor('.FormControl[data-label="Table"]', 5000));
 }
 
@@ -2559,28 +2607,39 @@ function afClickTaskTile(label: string): boolean {
   return true;
 }
 
-/** Add one process step of type "Run a data action". */
+/** Add one blank process step: "Add a step" → suggestions popup → "Create a new
+ *  step". Task type is set afterwards by afSetStepTaskType. */
 async function afBotAddStep(): Promise<boolean> {
-  const add = Array.from(document.querySelectorAll<HTMLElement>("button")).find(
-    (b) => b.offsetParent !== null && /^\s*add a step\s*$/i.test((b.textContent || "").trim()),
-  );
+  const add = afFindText(/^\s*add a step\s*$/i, "button");
   if (!add) return false;
-  add.click();
-  ttClick(add);
-  const t0 = performance.now();
-  for (;;) {
-    const item = Array.from(
-      document.querySelectorAll<HTMLElement>('[role="menuitem"], .MuiMenuItem-root, li, .MuiTypography-root'),
-    ).find((e) => e.offsetParent !== null && /^\s*run a data action\s*$/i.test((e.textContent || "").trim()));
-    if (item) {
-      item.click();
-      ttClick(item);
-      await ttSleep(700);
-      return true;
-    }
-    if (performance.now() - t0 > 4000) return false;
-    await ttSleep(120);
+  afHit(add);
+  await ttSleep(500);
+  const cns = await afWaitForText(/^\s*create a new step\s*$/i, 3000);
+  if (!cns) return false;
+  afHit(cns);
+  await ttSleep(1000);
+  return true;
+}
+
+/** Ensure the just-added step's task type is "Run a data action". A fresh step's
+ *  task-type control is a MuiSelect in the step card; set it if it isn't already. */
+async function afSetStepTaskType(): Promise<boolean> {
+  const card = afLastStepCard();
+  if (!card) return false;
+  if (/run a data action/i.test(card.textContent || "")) return true; // already
+  const sel = Array.from(card.querySelectorAll<HTMLElement>('.MuiSelect-select[role="button"]'))[0];
+  if (sel && (await afMuiSelectSet(sel, "Run a data action"))) {
+    await ttSleep(500);
+    return true;
   }
+  // fallback: a menu/list item with that text
+  const item = afFindText(/^\s*run a data action\s*$/i, '[role="menuitem"], .MuiMenuItem-root, li');
+  if (item) {
+    afHit(item);
+    await ttSleep(500);
+    return true;
+  }
+  return false;
 }
 
 async function afFillBot(ch: Change): Promise<OpResult> {
@@ -2638,6 +2697,8 @@ async function afFillBot(ch: Change): Promise<OpResult> {
       failed.push(`step:${st.action} (add)`);
       continue;
     }
+    if (!(await afSetStepTaskType())) failed.push(`step:${st.action} (task type)`);
+    await ttSleep(300);
     if (st.custom === "run_action_on_rows") {
       if (!afClickTaskTile("Run action on rows")) failed.push(`step:${st.action} (type)`);
       await ttSleep(300);
@@ -2655,9 +2716,12 @@ async function afFillBot(ch: Change): Promise<OpResult> {
       if (!(ra && (await afMuiSelectSet(ra, st.action)))) failed.push(`step:${st.action} (Referenced Action)`);
       await ttSleep(200);
     } else {
-      // existing mode: set the step card's action dropdown ("Custom action") to the action
-      const sel = afLastStepCard()?.querySelector<HTMLElement>('.MuiSelect-select[role="button"]');
-      if (!(sel && (await afMuiSelectSet(sel, st.action)))) failed.push(`step:${st.action}`);
+      // existing mode: set the step card's ACTION dropdown (shows "Custom action")
+      // to the existing action. The card also has the task-type select, so pick
+      // the one currently reading "Custom action" (fall back to the last select).
+      const selects = Array.from(afLastStepCard()?.querySelectorAll<HTMLElement>('.MuiSelect-select[role="button"]') || []);
+      const actSel = selects.find((s) => /custom action/i.test(s.textContent || "")) || selects[selects.length - 1];
+      if (!(actSel && (await afMuiSelectSet(actSel, st.action)))) failed.push(`step:${st.action}`);
       await ttSleep(200);
     }
   }
