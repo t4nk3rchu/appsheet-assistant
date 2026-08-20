@@ -2621,25 +2621,48 @@ async function afBotAddStep(): Promise<boolean> {
   return true;
 }
 
-/** Ensure the just-added step's task type is "Run a data action". A fresh step's
- *  task-type control is a MuiSelect in the step card; set it if it isn't already. */
+/** Pick a menu item by text from any open popover, ignoring the app's global
+ *  account/help menus (which share the same MUI popover classes). */
+async function afPickMenuItem(rx: RegExp, timeout = 3000): Promise<boolean> {
+  const t0 = performance.now();
+  for (;;) {
+    const menus = Array.from(
+      document.querySelectorAll<HTMLElement>('[role="menu"], .MuiMenu-list, .MuiPopover-paper, [role="listbox"]'),
+    ).filter((m) => m.offsetParent !== null && !/gimasys\.com|My Apps|Account settings|Documentation/i.test(m.textContent || ""));
+    for (const m of menus) {
+      const it = Array.from(
+        m.querySelectorAll<HTMLElement>('[role="menuitem"], li, .MuiMenuItem-root, [role="option"]'),
+      ).find((e) => rx.test((e.textContent || "").trim()));
+      if (it) {
+        afHit(it);
+        await ttSleep(700);
+        return true;
+      }
+    }
+    if (performance.now() - t0 > timeout) return false;
+    await ttSleep(120);
+  }
+}
+
+/** Ensure the just-added step's task type is "Run a data action". A fresh step
+ *  defaults to "Run a task"; switch it via the step card's
+ *  button[aria-label="toggle step type menu"]. */
 async function afSetStepTaskType(): Promise<boolean> {
   const card = afLastStepCard();
-  if (!card) return false;
-  if (/run a data action/i.test(card.textContent || "")) return true; // already
-  const sel = Array.from(card.querySelectorAll<HTMLElement>('.MuiSelect-select[role="button"]'))[0];
-  if (sel && (await afMuiSelectSet(sel, "Run a data action"))) {
-    await ttSleep(500);
-    return true;
+  if (card && /run a data action/i.test(card.textContent || "")) return true; // already
+  // Select the fresh step so its "toggle step type menu" button renders.
+  if (card) {
+    afHit(card);
+    await ttSleep(600);
   }
-  // fallback: a menu/list item with that text
-  const item = afFindText(/^\s*run a data action\s*$/i, '[role="menuitem"], .MuiMenuItem-root, li');
-  if (item) {
-    afHit(item);
-    await ttSleep(500);
-    return true;
-  }
-  return false;
+  const btn = Array.from(document.querySelectorAll<HTMLElement>('button[aria-label="toggle step type menu"]')).filter(
+    (b) => b.offsetParent !== null,
+  ).pop();
+  if (!btn) return false;
+  // SINGLE click — this is a toggle; afHit's native+synthetic double-fire opens
+  // then immediately closes the menu.
+  btn.click();
+  return afPickMenuItem(/^\s*run a data action\s*$/i);
 }
 
 async function afFillBot(ch: Change): Promise<OpResult> {
