@@ -2652,7 +2652,7 @@ async function afSetStepTaskType(): Promise<boolean> {
   if (card && /run a data action/i.test(card.textContent || "")) return true; // already
   // Select the fresh step so its "toggle step type menu" button renders.
   if (card) {
-    afHit(card);
+    afHit(card as HTMLElement);
     await ttSleep(600);
   }
   const btn = Array.from(document.querySelectorAll<HTMLElement>('button[aria-label="toggle step type menu"]')).filter(
