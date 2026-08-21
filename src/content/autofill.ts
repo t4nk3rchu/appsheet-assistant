@@ -185,6 +185,16 @@ async function ttFindRow(t: string, e: number | undefined, r: HTMLElement): Prom
   return byName();
 }
 
+/** Set a native <select> by an option whose text CONTAINS `frag` (case-insensitive)
+ *  — for long labels like the Time zone list ("(GMT+07:00) SE Asia Standard Time"). */
+function ttSetSelectContains(t: HTMLSelectElement, frag: string): boolean {
+  const f = String(frag).trim().toLowerCase();
+  const opt = Array.from(t.options).find(
+    (a) => (a.textContent || "").toLowerCase().includes(f) || (a.value || "").toLowerCase().includes(f),
+  );
+  return opt ? ttSetSelect(t, opt.value) : false;
+}
+
 /** Set a native <select>'s value + fire input/change/blur and a React onChange fallback (source ttSetSelect ~4047). */
 function ttSetSelect(t: HTMLSelectElement, e: string): boolean {
   const r = Array.from(t.options).find((a) => ttSame(a.value, e) || ttSame(a.textContent, e));
@@ -283,7 +293,7 @@ function afSetText(input: HTMLInputElement | null, value: string): boolean {
  *  The inline shortcut sets the DOM value, which passes an immediate check,
  *  but React re-renders and reverts it when the editor has validation errors.
  *  This function waits long enough for that revert to happen. */
-async function afValueStuck(inputEl: HTMLInputElement, expected: string, polls = 3, interval = 150): Promise<boolean> {
+async function afValueStuck(inputEl: HTMLInputElement | HTMLTextAreaElement, expected: string, polls = 3, interval = 150): Promise<boolean> {
   const norm = (s: string) => String(s ?? "").replace(/^\s*=/, "").trim().toLowerCase();
   const want = norm(expected);
   for (let i = 0; i < polls; i++) {
@@ -296,13 +306,14 @@ async function afValueStuck(inputEl: HTMLInputElement, expected: string, polls =
 // Set an AppSheet expression. The inline input is readonly + committed via the
 // Expression Assistant modal, so: try inline first; if it does not stick, open
 // the modal, inject into CodeMirror, then Save (source afSetExpression ~9217).
-async function afSetExpression(inputEl: HTMLInputElement | null, value: string): Promise<boolean> {
+async function afSetExpression(inputEl: HTMLInputElement | HTMLTextAreaElement | null, value: string): Promise<boolean> {
   const v = String(value == null ? "" : value).replace(/^\s*=/, "");
   if (inputEl) {
     try {
       const wasRO = inputEl.hasAttribute("readonly");
       if (wasRO) inputEl.removeAttribute("readonly");
-      const d = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+      const proto = inputEl instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const d = Object.getOwnPropertyDescriptor(proto, "value");
       if (d && d.set) d.set.call(inputEl, v);
       else inputEl.value = v;
       inputEl.dispatchEvent(new Event("input", { bubbles: true }));
@@ -331,7 +342,7 @@ async function afSetExpression(inputEl: HTMLInputElement | null, value: string):
 /** Inject an expression into the open (or opening) Expression Assistant modal
  *  via CodeMirror, then Save. Assumes something was just clicked to open it.
  *  Shared by afSetExpression (column/panel fields) and slice Row filter. */
-async function afInjectExprModal(v: string, inputEl?: HTMLInputElement | null): Promise<boolean> {
+async function afInjectExprModal(v: string, inputEl?: HTMLInputElement | HTMLTextAreaElement | null): Promise<boolean> {
   const dlg = await afWaitFor(".ExpressionControlModal", 3500);
   if (!dlg) return false;
   await ttSleep(170);
@@ -660,7 +671,11 @@ async function afSetPanelProp(panel: Element, label: string, value: string): Pro
     const inp = await afFlipToExpr(esw);
     if (inp) return afSetExpression(inp, v);
   }
-  const exprInp = fc.querySelector<HTMLInputElement>(EXPR_INP_SEL);
+  // Expression fields are usually a readonly <input>, but some (e.g. a task's
+  // Email Subject/Body, notification Title/Body) use a readonly <textarea>.
+  const exprInp = fc.querySelector<HTMLInputElement | HTMLTextAreaElement>(
+    EXPR_INP_SEL + ', textarea.MuiInputBase-input:not([aria-hidden="true"])',
+  );
   if (exprInp) return afSetExpression(exprInp, v);
   const mui = fc.querySelector<HTMLElement>('.MuiSelect-select[role="button"]');
   if (mui) return afMuiSelectSet(mui, v);
@@ -1853,6 +1868,72 @@ async function afVfeMuiSelect(pane: Element | null, label: string, optionText: s
   return afMuiSelectSet(sel, optionText);
 }
 
+/** Select a "Run a task" task-type tile (Send an email / Send a notification /
+ *  Call a webhook) — a .CardSelectControl[role="radio"] toggled by a SINGLE
+ *  native click (its state flips per click, like the data-change-type cards). */
+async function afSelectTaskTile(label: string): Promise<boolean> {
+  const tile = Array.from(document.querySelectorAll<HTMLElement>('.CardSelectControl[role="radio"]')).find(
+    (e) => e.offsetParent !== null && ttSame((e.textContent || "").trim(), label),
+  );
+  if (!tile) return false;
+  if (tile.getAttribute("aria-checked") === "true") return true;
+  tile.click();
+  await ttSleep(600);
+  return true;
+}
+
+/** Fill an expression OrderedList (e.g. a task's "To") with the given values,
+ *  one row each (adding rows as needed). Each row is a DynamicExpressionControl
+ *  with a "normal/expression" flask toggle (.SwitchButton .EnumOption). A value
+ *  that looks like an AppSheet expression (has ()/[]) is entered in EXPRESSION
+ *  mode (flip the flask, then use the Expression Assistant); a plain literal
+ *  (e.g. an email address) stays in normal text mode. */
+async function afFillExprList(label: string, values: string[]): Promise<boolean> {
+  const list = document.querySelector<HTMLElement>(`.FormControl[data-label="${label}"] .OrderedListControl`);
+  if (!list) return false;
+  const items = list.querySelector<HTMLElement>(".ListItems");
+  const addBtn = list.querySelector<HTMLButtonElement>("button.ListAddItem");
+  if (!items) return false;
+  const rows = () => Array.from(items.querySelectorAll<HTMLElement>(".ListItem")).filter((n) => n.offsetParent !== null);
+  let ok = true;
+  for (let k = 0; k < values.length; k++) {
+    if (k >= rows().length) {
+      if (!addBtn) {
+        ok = false;
+        break;
+      }
+      const before = rows().length;
+      addBtn.click(); // native — synthetic ttClick won't fire React onClick
+      for (let w = 0; w < 25 && rows().length <= before; w++) await ttSleep(60);
+    }
+    const row = rows()[k];
+    if (!row) {
+      ok = false;
+      continue;
+    }
+    const val = String(values[k]);
+    const isExpr = /[()[\]]/.test(val);
+    if (isExpr) {
+      // Flip this row's flask to expression mode, then set via the Assistant.
+      const enumCtrl = row.querySelector(".SwitchButton .EnumControl");
+      if (enumCtrl && enumCtrl.getAttribute("data-value") !== "expression") {
+        const opt = enumCtrl.querySelector<HTMLElement>('.EnumOption[data-value="expression"]');
+        if (opt) {
+          opt.click();
+          await ttSleep(300);
+        }
+      }
+      const inp = row.querySelector<HTMLInputElement>(EXPR_INP_SEL);
+      if (!inp || !(await afSetExpression(inp, val))) ok = false;
+    } else {
+      const inp = row.querySelector<HTMLInputElement>("input.MuiInputBase-input, input[type=text]");
+      if (!inp || !afSetText(inp, val)) ok = false;
+    }
+    await ttSleep(150);
+  }
+  return ok;
+}
+
 /** Populate an OrderedListControl (Sort by / Group by) with {column, order} rows.
  *  Each "Add" click appends a SortedListControl row = a MUI column select + an
  *  Ascending/Descending dropdown. Rebuilding from scratch would need removing
@@ -2750,6 +2831,183 @@ async function afSetDataChangeType(wanted: string[]): Promise<boolean> {
   return true;
 }
 
+/** Find a scheduled sub-field's control (input or native select) by the text of
+ *  its <label>, within the Schedule FormControl. Each sub-field is a label +
+ *  control in the same small row container. */
+function afSchedField(box: Element, rx: RegExp): HTMLElement | null {
+  const lbl = Array.from(box.querySelectorAll<HTMLElement>("label")).find((e) => rx.test((e.textContent || "").trim()));
+  let row: Element | null = lbl ?? null;
+  for (let k = 0; k < 5 && row; k++) {
+    const c = row.querySelector<HTMLElement>("input:not([type=hidden]), select");
+    if (c && c.offsetParent !== null) return c;
+    row = row.parentElement;
+  }
+  return null;
+}
+
+/** Configure a "Scheduled" event: frequency card + its sub-fields (minute/time/
+ *  day-of-week/day-of-month/week-of-month) + Time zone. Returns a list of field
+ *  labels that failed (empty = all good). AppSheet defaults cover anything left
+ *  unset. ponytail: "For Each Row In Table" (per-row scheduled) not wired yet. */
+async function afSetSchedule(ch: any): Promise<string[]> {
+  const bad: string[] = [];
+  const box = document.querySelector('.FormControl[data-label="Schedule"]');
+  if (!box) return ["schedule (no control)"];
+
+  // Frequency: the first radios in the Schedule control (Hourly/Daily/Weekly/
+  // Monthly/Monthly (by week)). Match by normalized text.
+  if (ch.frequency) {
+    const want = String(ch.frequency).toLowerCase() === "monthly by week" ? "monthly (by week)" : String(ch.frequency).toLowerCase();
+    const radio = Array.from(box.querySelectorAll<HTMLElement>('[role="radio"]')).find(
+      (r) => (r.textContent || "").trim().toLowerCase().replace(/\s+/g, " ") === want,
+    );
+    if (!radio) bad.push("frequency");
+    else if (radio.getAttribute("aria-checked") !== "true") {
+      radio.click();
+      await ttSleep(800);
+    }
+  }
+
+  // Minute of the hour (Hourly)
+  if (ch.minuteOfHour != null) {
+    const inp = afSchedField(box, /minute of the hour/i) as HTMLInputElement | null;
+    if (!afSetText(inp, String(ch.minuteOfHour))) bad.push("minuteOfHour");
+    await ttSleep(150);
+  }
+  // Time (Daily/Weekly/Monthly/by-week)
+  if (ch.time != null) {
+    const inp = afSchedField(box, /^time$/i) as HTMLInputElement | null;
+    if (!afSetText(inp, String(ch.time))) bad.push("time");
+    await ttSleep(150);
+  }
+  // Day of the month (Monthly) — native select.dropdownSelect
+  if (ch.dayOfMonth != null) {
+    const sel = afSchedField(box, /day of the month/i) as HTMLSelectElement | null;
+    if (!(sel && ttSetSelect(sel, String(ch.dayOfMonth)))) bad.push("dayOfMonth");
+    await ttSleep(150);
+  }
+  // Week of the month (Monthly by week) — native select.dropdownSelect
+  if (ch.weekOfMonth != null) {
+    const sel = afSchedField(box, /week of the month/i) as HTMLSelectElement | null;
+    if (!(sel && ttSetSelect(sel, String(ch.weekOfMonth)))) bad.push("weekOfMonth");
+    await ttSleep(150);
+  }
+  // Day of the week (Weekly / Monthly by week) — 7 single-letter role=radio
+  // toggles in Sun..Sat order (letters repeat, so index positionally). Each
+  // toggle re-renders the row, detaching prior node refs — so re-query fresh
+  // every time. Single native click toggles; additions first (never clear to 0).
+  if (Array.isArray(ch.daysOfWeek) && ch.daysOfWeek.length) {
+    const ORDER = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const dayRadios = () =>
+      Array.from(box.querySelectorAll<HTMLElement>('[role="radio"]')).filter(
+        (r) => /^[SMTWF]$/.test((r.textContent || "").trim()),
+      );
+    if (dayRadios().length === 7) {
+      const wanted = ch.daysOfWeek.map((d: string) => d.toLowerCase());
+      for (const pass of [true, false]) {
+        for (let d = 0; d < 7; d++) {
+          const radios = dayRadios();
+          if (radios.length !== 7) break;
+          const on = radios[d].getAttribute("aria-checked") === "true";
+          const want = wanted.includes(ORDER[d].toLowerCase());
+          if (want === pass && on !== want) {
+            radios[d].click();
+            await ttSleep(250);
+          }
+        }
+      }
+    } else bad.push("daysOfWeek");
+  }
+  // Time zone (its own FormControl) — a native select.dropdownSelect. Option
+  // labels are long ("(GMT+07:00) SE Asia Standard Time"); match by substring so
+  // callers can pass an offset or region fragment ("GMT+07", "SE Asia").
+  if (ch.timeZone != null) {
+    const tz = afCtrl("Time zone")?.querySelector<HTMLSelectElement>("select.dropdownSelect");
+    if (!(tz && ttSetSelectContains(tz, String(ch.timeZone)))) bad.push("timeZone");
+    await ttSleep(150);
+  }
+  return bad;
+}
+
+/** Enable "For Each Row In Table" on a scheduled event and set its Table +
+ *  Filter Condition — required for run_a_data_action steps on a schedule. */
+async function afSetForEachRow(fer: { table: string; condition?: string }): Promise<string[]> {
+  const bad: string[] = [];
+  const sw = afCtrl("For Each Row In Table")?.querySelector(".SwitchControl");
+  if (sw && sw.getAttribute("data-value") !== "true") {
+    // Click the hidden checkbox input specifically — a comma-list querySelector
+    // returns the wrapping .MuiButtonBase-root first (document order), and
+    // clicking that doesn't reliably flip this switch.
+    const input =
+      sw.querySelector<HTMLElement>("input.MuiSwitch-input") ||
+      sw.querySelector<HTMLElement>("input[type=checkbox]") ||
+      sw.querySelector<HTMLElement>(".MuiButtonBase-root");
+    (input || (sw as HTMLElement)).click();
+    await ttSleep(500);
+  }
+  if (fer.table) {
+    const sel = afCtrl("Table")?.querySelector<HTMLSelectElement>("select.dropdownSelect");
+    if (!(sel && ttSetSelect(sel, fer.table))) bad.push("forEachRow.table");
+    await ttSleep(200);
+  }
+  if (fer.condition) {
+    const inp = afCtrl("Filter Condition")?.querySelector<HTMLInputElement>(EXPR_INP_SEL);
+    if (!(inp && (await afSetExpression(inp, fer.condition)))) bad.push("forEachRow.condition");
+    await ttSleep(200);
+  }
+  return bad;
+}
+
+/** Fill a "Run a task" step (email | notification | webhook). Assumes the step
+ *  card is selected so its config shows in the right pane. Uses the generic
+ *  afSetPanelProp for scalar fields and afFillExprList for the "To" list. */
+async function afFillTaskStep(s: any): Promise<string[]> {
+  const bad: string[] = [];
+  const tile: Record<string, string> = { email: "Send an email", notification: "Send a notification", webhook: "Call a webhook" };
+  if (!(await afSelectTaskTile(tile[s.task]))) return [`task:${s.task} (tile)`];
+  await ttSleep(400);
+  const root = document.documentElement;
+
+  if (s.task === "notification" && (s.title != null || s.body != null)) {
+    // Reveal Title/Body by turning "Use default content?" off.
+    const dc = afCtrl("Use default content?")?.querySelector(".SwitchControl");
+    if (dc && dc.getAttribute("data-value") === "true") {
+      const input =
+        dc.querySelector<HTMLElement>("input.MuiSwitch-input") ||
+        dc.querySelector<HTMLElement>("input[type=checkbox]") ||
+        dc.querySelector<HTMLElement>(".MuiButtonBase-root");
+      (input || (dc as HTMLElement)).click();
+      await ttSleep(400);
+    }
+  }
+
+  if (s.to != null) {
+    const vals = Array.isArray(s.to) ? s.to : [s.to];
+    if (!(await afFillExprList("To", vals.map(String)))) bad.push("to");
+  }
+  // Scalar fields → their exact editor labels, driven generically.
+  const map: Record<string, [string, any]> =
+    s.task === "email" ? { subject: ["Email Subject", s.subject], body: ["Email Body", s.body] }
+    : s.task === "notification" ? { title: ["Title", s.title], body: ["Body", s.body], deepLink: ["DeepLink", s.deepLink] }
+    // ponytail: "JSON" is AppSheet's default; skip so we don't report a false failure when unchanged.
+    : { url: ["Url", s.url], verb: ["HTTP Verb", s.verb], contentType: ["HTTP Content Type", s.contentType === "JSON" ? null : s.contentType], body: ["Body", s.body], headers: ["HTTP Headers", s.headers] };
+  for (const key of Object.keys(map)) {
+    const [label, val] = map[key];
+    if (val == null || val === "") continue;
+    if (!(await afSetPanelProp(root, label, String(val)))) bad.push(key);
+    await ttSleep(150);
+  }
+  // Escape-hatch: any other task field by exact label.
+  if (s.taskProps && typeof s.taskProps === "object") {
+    for (const [label, val] of Object.entries(s.taskProps)) {
+      if (val == null || val === "") continue;
+      if (!(await afSetPanelProp(root, label, String(val)))) bad.push(`taskProps:${label}`);
+      await ttSleep(150);
+    }
+  }
+  return bad;
+}
+
 async function afFillBot(ch: Change): Promise<OpResult> {
   const chAny = ch as any;
   if (!(await afGotoBots())) return { ok: false, reason: "Không mở được Automation → Bots." };
@@ -2770,9 +3028,22 @@ async function afFillBot(ch: Change): Promise<OpResult> {
 
   const failed: string[] = [];
 
-  // Event (data change)
+  // Event — data_change (table + dataChangeType) or scheduled (frequency etc.)
+  const scheduled = chAny.eventType === "scheduled";
   if (await afOpenBotEvent()) {
-    if (ch.table) {
+    if (scheduled) {
+      // Switch Event source to "Scheduled" (afOpenBotEvent created a default
+      // data-change event); this swaps the Table control for the schedule ones.
+      const src = afCtrl("Event source")?.querySelector<HTMLElement>('.MuiSelect-select[role="button"]');
+      if (!(src && (await afMuiSelectSet(src, "Scheduled")))) failed.push("event source");
+      await ttSleep(700);
+      const bad = await afSetSchedule(chAny);
+      if (bad.length) failed.push(...bad);
+      if (chAny.forEachRow) {
+        const ferBad = await afSetForEachRow(chAny.forEachRow);
+        if (ferBad.length) failed.push(...ferBad);
+      }
+    } else if (ch.table) {
       const s = afCtrl("Table")?.querySelector<HTMLSelectElement>("select.dropdownSelect");
       if (!(s && ttSetSelect(s, ch.table))) failed.push("table");
       await ttSleep(250);
@@ -2800,7 +3071,7 @@ async function afFillBot(ch: Change): Promise<OpResult> {
         await ttSleep(150);
       }
     }
-    if (Array.isArray(chAny.dataChangeType) && chAny.dataChangeType.length) {
+    if (!scheduled && Array.isArray(chAny.dataChangeType) && chAny.dataChangeType.length) {
       if (!(await afSetDataChangeType(chAny.dataChangeType))) failed.push("dataChangeType");
       await ttSleep(150);
     }
@@ -2825,36 +3096,50 @@ async function afFillBot(ch: Change): Promise<OpResult> {
 
   // Process steps
   for (const st of (ch.steps || []) as any[]) {
+    const tag = st.task || st.action || "?";
     if (!(await afBotAddStep())) {
-      failed.push(`step:${st.action} (add)`);
+      failed.push(`step:${tag} (add)`);
       continue;
     }
-    if (!(await afSetStepTaskType())) failed.push(`step:${st.action} (task type)`);
-    await ttSleep(300);
-    if (st.custom === "run_action_on_rows") {
-      if (!afClickTaskTile("Run action on rows")) failed.push(`step:${st.action} (type)`);
-      await ttSleep(300);
-      if (st.table) {
-        const rt = afCtrl("Referenced Table")?.querySelector<HTMLElement>('.MuiSelect-select[role="button"]');
-        if (!(rt && (await afMuiSelectSet(rt, st.table)))) failed.push(`step:${st.action} (Referenced Table)`);
-        await ttSleep(200);
+    if (st.task) {
+      // "Run a task" — a fresh step already defaults to "Run a task", so do NOT
+      // flip the step type. Select the card so its config shows, then fill.
+      const card = afLastStepCard();
+      if (card) {
+        afHit(card as HTMLElement);
+        await ttSleep(400);
       }
-      if (st.rows) {
-        const inp = afCtrl("Referenced rows")?.querySelector<HTMLInputElement>(EXPR_INP_SEL);
-        if (!(inp && (await afSetExpression(inp, st.rows)))) failed.push(`step:${st.action} (Referenced rows)`);
-        await ttSleep(200);
-      }
-      const ra = afCtrl("Referenced Action")?.querySelector<HTMLElement>('.MuiSelect-select[role="button"]');
-      if (!(ra && (await afMuiSelectSet(ra, st.action)))) failed.push(`step:${st.action} (Referenced Action)`);
-      await ttSleep(200);
+      const bad = await afFillTaskStep(st);
+      failed.push(...bad.map((b) => `step:${tag} (${b})`));
     } else {
-      // existing mode: set the step card's ACTION dropdown (shows "Custom action")
-      // to the existing action. The card also has the task-type select, so pick
-      // the one currently reading "Custom action" (fall back to the last select).
-      const selects = Array.from(afLastStepCard()?.querySelectorAll<HTMLElement>('.MuiSelect-select[role="button"]') || []);
-      const actSel = selects.find((s) => /custom action/i.test(s.textContent || "")) || selects[selects.length - 1];
-      if (!(actSel && (await afMuiSelectSet(actSel, st.action)))) failed.push(`step:${st.action}`);
-      await ttSleep(200);
+      // "Run a data action" — flip the step type from the default "Run a task".
+      if (!(await afSetStepTaskType())) failed.push(`step:${tag} (task type)`);
+      await ttSleep(300);
+      if (st.custom === "run_action_on_rows") {
+        if (!afClickTaskTile("Run action on rows")) failed.push(`step:${tag} (type)`);
+        await ttSleep(300);
+        if (st.table) {
+          const rt = afCtrl("Referenced Table")?.querySelector<HTMLElement>('.MuiSelect-select[role="button"]');
+          if (!(rt && (await afMuiSelectSet(rt, st.table)))) failed.push(`step:${tag} (Referenced Table)`);
+          await ttSleep(200);
+        }
+        if (st.rows) {
+          const inp = afCtrl("Referenced rows")?.querySelector<HTMLInputElement>(EXPR_INP_SEL);
+          if (!(inp && (await afSetExpression(inp, st.rows)))) failed.push(`step:${tag} (Referenced rows)`);
+          await ttSleep(200);
+        }
+        const ra = afCtrl("Referenced Action")?.querySelector<HTMLElement>('.MuiSelect-select[role="button"]');
+        if (!(ra && (await afMuiSelectSet(ra, st.action)))) failed.push(`step:${tag} (Referenced Action)`);
+        await ttSleep(200);
+      } else {
+        // existing mode: set the step card's ACTION dropdown (shows "Custom action")
+        // to the existing action. The card also has the task-type select, so pick
+        // the one currently reading "Custom action" (fall back to the last select).
+        const selects = Array.from(afLastStepCard()?.querySelectorAll<HTMLElement>('.MuiSelect-select[role="button"]') || []);
+        const actSel = selects.find((s) => /custom action/i.test(s.textContent || "")) || selects[selects.length - 1];
+        if (!(actSel && (await afMuiSelectSet(actSel, st.action)))) failed.push(`step:${tag}`);
+        await ttSleep(200);
+      }
     }
     if (st.name) {
       await afSetStepName(st.name);

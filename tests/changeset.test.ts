@@ -344,4 +344,63 @@ describe("validateChangeset add_bot", () => {
     expect(validateChangeset(tables, [bot(["Adds", "Nope"]) as any]).ok).toBe(false);
     expect(validateChangeset(tables, [bot("sometimes") as any]).ok).toBe(false);
   });
+
+  it("scheduled: no table needed, requires valid frequency, normalizes days/week", () => {
+    const r = validateChangeset(tables, [
+      { op: "add_bot", name: "S1", eventType: "scheduled", frequency: "monthly by week",
+        weekOfMonth: "1ST", daysOfWeek: ["monday", "WED"], time: "8:00 am",
+        steps: [{ task: "notification", to: "USEREMAIL()", title: "Hi", body: "x" }] } as any,
+    ]);
+    expect(r.ok).toBe(true);
+    const c = r.normalized[0] as any;
+    expect(c.eventType).toBe("scheduled");
+    expect(c.frequency).toBe("Monthly by week");
+    expect(c.weekOfMonth).toBe("1st");
+    expect(c.daysOfWeek).toEqual(["Mon", "Wed"]);
+
+    // scheduled with a missing/invalid frequency is rejected
+    expect(validateChangeset(tables, [{ op: "add_bot", name: "S2", eventType: "scheduled", steps: [{ action: "A" }] } as any]).ok).toBe(false);
+    expect(validateChangeset(tables, [{ op: "add_bot", name: "S3", eventType: "scheduled", frequency: "yearly", steps: [{ action: "A" }] } as any]).ok).toBe(false);
+  });
+
+  it("scheduled: bad minuteOfHour/dayOfMonth rejected; dataChangeType stripped + warned", () => {
+    expect(validateChangeset(tables, [{ op: "add_bot", name: "S4", eventType: "scheduled", frequency: "Hourly", minuteOfHour: "99", steps: [{ action: "A" }] } as any]).ok).toBe(false);
+    expect(validateChangeset(tables, [{ op: "add_bot", name: "S5", eventType: "scheduled", frequency: "Monthly", dayOfMonth: "40", steps: [{ action: "A" }] } as any]).ok).toBe(false);
+    const r = validateChangeset(tables, [
+      { op: "add_bot", name: "S6", eventType: "scheduled", frequency: "Daily", time: "9:00 am",
+        dataChangeType: ["Adds"], task: undefined, steps: [{ task: "email", to: "USEREMAIL()", subject: "x" }] } as any,
+    ]);
+    expect(r.ok).toBe(true);
+    expect((r.normalized[0] as any).dataChangeType).toBeUndefined();
+    expect(r.issues.some((x) => x.level === "warn" && /dataChangeType/.test(x.msg))).toBe(true);
+  });
+
+  it("task steps: normalize `to`, require webhook url, strip data-action fields", () => {
+    const r = validateChangeset(tables, [
+      { op: "add_bot", name: "T1", eventType: "scheduled", frequency: "Daily",
+        steps: [{ task: "EMAIL", to: "USEREMAIL()", subject: "Hi", action: "ShouldBeDropped" }] } as any,
+    ]);
+    expect(r.ok).toBe(true);
+    const s = (r.normalized[0] as any).steps[0];
+    expect(s.task).toBe("email");
+    expect(s.to).toEqual(["USEREMAIL()"]);
+    expect(s.action).toBeUndefined();
+    // webhook requires url
+    expect(validateChangeset(tables, [{ op: "add_bot", name: "T2", eventType: "scheduled", frequency: "Daily", steps: [{ task: "webhook" }] } as any]).ok).toBe(false);
+    // unknown task rejected
+    expect(validateChangeset(tables, [{ op: "add_bot", name: "T3", eventType: "scheduled", frequency: "Daily", steps: [{ task: "sms" }] } as any]).ok).toBe(false);
+  });
+
+  it("scheduled data-action step requires forEachRow; forEachRow validates table", () => {
+    // data-action step on a schedule without forEachRow → error
+    expect(validateChangeset(tables, [{ op: "add_bot", name: "F1", eventType: "scheduled", frequency: "Daily", steps: [{ action: "A" }] } as any]).ok).toBe(false);
+    // with forEachRow on a real table → ok
+    const r = validateChangeset(tables, [
+      { op: "add_bot", name: "F2", eventType: "scheduled", frequency: "Daily",
+        forEachRow: { table: "VĂN_BẢN", condition: "[trạng_thái]=\"x\"" }, steps: [{ action: "A" }] } as any,
+    ]);
+    expect(r.ok).toBe(true);
+    // forEachRow with a bad table → error
+    expect(validateChangeset(tables, [{ op: "add_bot", name: "F3", eventType: "scheduled", frequency: "Daily", forEachRow: { table: "NOPE" }, steps: [{ action: "A" }] } as any]).ok).toBe(false);
+  });
 });

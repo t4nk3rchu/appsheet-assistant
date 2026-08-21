@@ -128,18 +128,62 @@ export interface Change {
   dataChangeType?: string[];
   bypassSecurity?: boolean; // "Bypass security filters?" toggle
   steps?: BotStep[]; // process steps (run_a_data_action)
+  // Event kind. "data_change" (default) uses table + dataChangeType; "scheduled"
+  // uses the schedule fields below (and ignores dataChangeType).
+  eventType?: "data_change" | "scheduled";
+  frequency?: string; // scheduled: Hourly | Daily | Weekly | Monthly | Monthly by week
+  minuteOfHour?: string; // Hourly (0–59)
+  time?: string; // Daily/Weekly/Monthly/by-week, e.g. "2:30 pm"
+  daysOfWeek?: string[]; // Weekly / Monthly by week — canonical Sun..Sat
+  dayOfMonth?: string; // Monthly (1–31)
+  weekOfMonth?: string; // Monthly by week: 1st | 2nd | 3rd | 4th | last
+  timeZone?: string; // exact "Time zone" dropdown label (optional)
+  // "For Each Row In Table" — required to use run_a_data_action steps on a
+  // scheduled event; the step then runs per row of `table` matching `condition`.
+  forEachRow?: { table: string; condition?: string };
 }
 
-/** One process step in an add_bot bot. v1: type is always "run_a_data_action".
- *  `custom` absent = pick an EXISTING action (by name) from the step's dropdown;
- *  `custom: "run_action_on_rows"` = build the inline custom action (table+rows+action). */
+/** "Run a task" step task types → the CardSelect tile label in the editor. */
+export const BOT_TASK_TILES: Record<string, string> = {
+  email: "Send an email",
+  notification: "Send a notification",
+  webhook: "Call a webhook",
+};
+
+/** Scheduled-event frequencies + the day/week vocab, for validation. */
+export const BOT_FREQUENCIES = ["Hourly", "Daily", "Weekly", "Monthly", "Monthly by week"];
+const DOW_CANON: Record<string, string> = {
+  sun: "Sun", sunday: "Sun", mon: "Mon", monday: "Mon", tue: "Tue", tues: "Tue", tuesday: "Tue",
+  wed: "Wed", weds: "Wed", wednesday: "Wed", thu: "Thu", thur: "Thu", thurs: "Thu", thursday: "Thu",
+  fri: "Fri", friday: "Fri", sat: "Sat", saturday: "Sat",
+};
+export const WEEK_OF_MONTH = ["1st", "2nd", "3rd", "4th", "last"];
+
+/** One process step in an add_bot bot. Two kinds:
+ *  - "Run a task" (set `task`): email | notification | webhook, with the field(s)
+ *    below (any extra field via `taskProps` keyed by exact editor label).
+ *  - "Run a data action" (set `action`, no `task`): pick an EXISTING action by
+ *    name, or `custom:"run_action_on_rows"` for the inline table+rows+action. */
 export interface BotStep {
-  type?: string; // "run_a_data_action" (default; only value in v1)
+  name?: string; // step display name
+  // ── Run a task ──
+  task?: "email" | "notification" | "webhook"; // presence ⇒ "Run a task"
+  to?: string | string[]; // email/notification recipients (expressions)
+  subject?: string; // email
+  title?: string; // notification
+  body?: string; // email/notification/webhook
+  deepLink?: string; // notification
+  url?: string; // webhook
+  verb?: string; // webhook HTTP verb (GET|POST|…)
+  contentType?: string; // webhook HTTP content type
+  headers?: string; // webhook HTTP headers
+  taskProps?: Record<string, string>; // escape hatch: any task field by exact label
+  // ── Run a data action ──
+  type?: string; // "run_a_data_action"
   custom?: string; // "run_action_on_rows" (custom mode) | absent (existing-action mode)
   action?: string; // existing action name (dropdown pick, or Referenced Action in custom mode)
   table?: string; // custom mode: Referenced Table
   rows?: string; // custom mode: Referenced rows expression
-  name?: string; // step display name
 }
 
 /** One row in a view's Sort by / Group by ordered list. */
@@ -427,8 +471,14 @@ export function validateChangeset(tables: Table[], changes: unknown): Validation
 
     if (ch.op === "add_bot") {
       if (!ch.name) return add(i, "error", "add_bot thiếu 'name'.");
-      if (!ch.table) return add(i, "error", "add_bot thiếu 'table' (bảng của event).");
-      if (tableNames.size && !tableNames.has(ch.table)) return add(i, "error", `Bảng không tồn tại: ${ch.table}`);
+      // Event kind: data_change (default) needs a table; scheduled does not.
+      const et = String((ch as any).eventType ?? "data_change").trim().toLowerCase();
+      if (et !== "data_change" && et !== "scheduled")
+        return add(i, "error", `eventType không hợp lệ: ${(ch as any).eventType} (data_change|scheduled)`);
+      ch.eventType = et as any;
+      const scheduled = et === "scheduled";
+      if (!scheduled && !ch.table) return add(i, "error", "add_bot (data_change) thiếu 'table' (bảng của event).");
+      if (ch.table && tableNames.size && !tableNames.has(ch.table)) return add(i, "error", `Bảng không tồn tại: ${ch.table}`);
       if (ch.eventName != null && typeof ch.eventName !== "string") add(i, "error", "'eventName' phải là chuỗi.");
       if (!ch.eventName) delete ch.eventName;
       if (ch.condition != null && typeof ch.condition !== "string") add(i, "error", "'condition' phải là chuỗi.");
@@ -436,8 +486,12 @@ export function validateChangeset(tables: Table[], changes: unknown): Validation
       // dataChangeType: normalize to a canonical non-empty subset of
       // ["Adds","Deletes","Updates"]. Accept an array of those (any case) OR a
       // legacy alias string. Unknown token or empty set = hard error (no silent
-      // fallback to All changes).
-      {
+      // fallback to All changes). Scheduled events have no data-change type.
+      if (scheduled && (ch as any).dataChangeType != null) {
+        add(i, "warn", "dataChangeType bị bỏ qua với eventType 'scheduled'.");
+        delete ch.dataChangeType;
+      }
+      if (!scheduled) {
         const dct: any = (ch as any).dataChangeType;
         const CANON: Record<string, string> = { adds: "Adds", deletes: "Deletes", updates: "Updates" };
         const ALIAS: Record<string, string[]> = {
@@ -471,21 +525,120 @@ export function validateChangeset(tables: Table[], changes: unknown): Validation
         if (arr) ch.dataChangeType = arr;
         else delete ch.dataChangeType;
       }
+
+      // Scheduled-event fields. AppSheet has sensible defaults, so only
+      // `frequency` is required; the rest are validated-if-present and the
+      // engine leaves anything omitted at its default.
+      if (scheduled) {
+        const freqRaw = String(ch.frequency ?? "").trim().toLowerCase();
+        const freq = BOT_FREQUENCIES.find((f) => f.toLowerCase() === freqRaw);
+        if (!freq) add(i, "error", `add_bot (scheduled) 'frequency' không hợp lệ: ${ch.frequency ?? "(thiếu)"} (${BOT_FREQUENCIES.join(" | ")})`);
+        else ch.frequency = freq;
+        // daysOfWeek → canonical Sun..Sat (Weekly / Monthly by week)
+        if (ch.daysOfWeek != null) {
+          if (!Array.isArray(ch.daysOfWeek)) {
+            add(i, "error", "'daysOfWeek' phải là mảng tên thứ (Sun..Sat).");
+            delete ch.daysOfWeek;
+          } else {
+            const out: string[] = [];
+            for (const d of ch.daysOfWeek) {
+              const c = DOW_CANON[String(d).trim().toLowerCase()];
+              if (!c) add(i, "error", `daysOfWeek không hợp lệ: ${d} (Sun|Mon|Tue|Wed|Thu|Fri|Sat)`);
+              else if (!out.includes(c)) out.push(c);
+            }
+            if (out.length) ch.daysOfWeek = out;
+            else delete ch.daysOfWeek;
+          }
+        }
+        if (ch.weekOfMonth != null && ch.weekOfMonth !== "") {
+          const w = WEEK_OF_MONTH.find((x) => x.toLowerCase() === String(ch.weekOfMonth).trim().toLowerCase());
+          if (!w) add(i, "error", `weekOfMonth không hợp lệ: ${ch.weekOfMonth} (${WEEK_OF_MONTH.join(" | ")})`);
+          else ch.weekOfMonth = w;
+        }
+        // Coerce numeric fields to trimmed strings; drop empties.
+        for (const f of ["minuteOfHour", "dayOfMonth", "time", "timeZone"] as const) {
+          const v = (ch as any)[f];
+          if (v == null || String(v).trim() === "") delete (ch as any)[f];
+          else (ch as any)[f] = String(v).trim();
+        }
+        const dm = ch.dayOfMonth != null ? Number(ch.dayOfMonth) : NaN;
+        if (ch.dayOfMonth != null && (!Number.isInteger(dm) || dm < 1 || dm > 31))
+          add(i, "error", `dayOfMonth phải là 1–31: ${ch.dayOfMonth}`);
+        const mh = ch.minuteOfHour != null ? Number(ch.minuteOfHour) : NaN;
+        if (ch.minuteOfHour != null && (!Number.isInteger(mh) || mh < 0 || mh > 59))
+          add(i, "error", `minuteOfHour phải là 0–59: ${ch.minuteOfHour}`);
+        // For Each Row In Table (needed for run_a_data_action steps on a schedule).
+        if (ch.forEachRow != null) {
+          const fer: any = ch.forEachRow;
+          if (typeof fer !== "object" || Array.isArray(fer) || !fer.table)
+            add(i, "error", "'forEachRow' phải là { table, condition? } với 'table'.");
+          else {
+            if (tableNames.size && !tableNames.has(fer.table)) add(i, "error", `forEachRow.table không tồn tại: ${fer.table}`);
+            if (fer.condition != null && typeof fer.condition !== "string") add(i, "error", "'forEachRow.condition' phải là chuỗi.");
+            if (!fer.condition) delete fer.condition;
+          }
+        }
+      } else {
+        // Strip scheduled-only fields from a data_change bot.
+        for (const f of ["frequency", "minuteOfHour", "time", "daysOfWeek", "dayOfMonth", "weekOfMonth", "timeZone", "forEachRow"] as const)
+          delete (ch as any)[f];
+      }
+
       if (!Array.isArray(ch.steps) || ch.steps.length === 0) return add(i, "error", "add_bot cần ít nhất 1 step.");
       ch.steps.forEach((s, si) => {
         if (!s || typeof s !== "object") return add(i, "error", `step[${si}] không hợp lệ.`);
-        if (s.type && s.type !== "run_a_data_action")
-          add(i, "error", `step[${si}].type không hỗ trợ: ${s.type} (chỉ 'run_a_data_action')`);
-        s.type = "run_a_data_action";
-        if (s.custom && s.custom !== "run_action_on_rows")
-          add(i, "error", `step[${si}].custom không hỗ trợ: ${s.custom} (chỉ 'run_action_on_rows')`);
-        if (!s.action) return add(i, "error", `step[${si}] thiếu 'action'.`);
-        if (s.custom) {
-          if (s.table && tableNames.size && !tableNames.has(s.table)) add(i, "warn", `step[${si}].table không tồn tại: ${s.table}`);
-          if (s.rows != null && typeof s.rows !== "string") add(i, "error", `step[${si}].rows phải là chuỗi.`);
+        if (s.task != null) {
+          // ── Run a task ── (email | notification | webhook)
+          if (!BOT_TASK_TILES[String(s.task).toLowerCase()])
+            return add(i, "error", `step[${si}].task không hỗ trợ: ${s.task} (email|notification|webhook)`);
+          s.task = String(s.task).toLowerCase() as any;
+          if (s.task === "webhook" && !s.url) add(i, "error", `step[${si}] (webhook) thiếu 'url'.`);
+          // Normalize contentType aliases → AppSheet option values (JSON/CSV/XML/…)
+          if (s.task === "webhook" && s.contentType != null) {
+            const CT_ALIAS: Record<string, string> = {
+              "application/json": "JSON", "json": "JSON",
+              "text/csv": "CSV", "csv": "CSV",
+              "application/x-www-form-urlencoded": "FORM_URL_ENCODED", "form_url_encoded": "FORM_URL_ENCODED",
+              "text/html": "HTML", "html": "HTML",
+              "application/pdf": "PDF", "pdf": "PDF",
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "XLSX", "xlsx": "XLSX",
+              "application/xml": "XML", "text/xml": "XML", "xml": "XML",
+              "ics_calendar": "ICS_CALENDAR",
+            };
+            const ct = String(s.contentType).trim();
+            (s as any).contentType = CT_ALIAS[ct.toLowerCase()] ?? ct.toUpperCase();
+          }
+          if ((s.task === "email" || s.task === "notification") && !s.to)
+            add(i, "warn", `step[${si}] (${s.task}) không có 'to' — dùng mặc định của AppSheet.`);
+          // normalize `to` to string[]
+          if (s.to != null) {
+            const arr = (Array.isArray(s.to) ? s.to : [s.to]).map((x) => String(x).trim()).filter(Boolean);
+            if (arr.length) (s as any).to = arr;
+            else delete (s as any).to;
+          }
+          if (s.taskProps != null && (typeof s.taskProps !== "object" || Array.isArray(s.taskProps)))
+            add(i, "error", `step[${si}].taskProps phải là object {label: value}.`);
+          // drop data-action-only fields
+          for (const f of ["type", "custom", "action", "rows"] as const) delete (s as any)[f];
+          if (s.task !== "webhook") delete (s as any).table; // webhook has no table binding either, but keep harmless
         } else {
-          delete s.table; // existing mode: only the action name is needed
-          delete s.rows;
+          // ── Run a data action ──
+          if (s.type && s.type !== "run_a_data_action")
+            add(i, "error", `step[${si}].type không hỗ trợ: ${s.type} (chỉ 'run_a_data_action')`);
+          s.type = "run_a_data_action";
+          if (s.custom && s.custom !== "run_action_on_rows")
+            add(i, "error", `step[${si}].custom không hỗ trợ: ${s.custom} (chỉ 'run_action_on_rows')`);
+          if (!s.action) return add(i, "error", `step[${si}] thiếu 'action' (hoặc dùng 'task' cho Run a task).`);
+          // A scheduled event can only run a data action per-row → needs forEachRow.
+          if (scheduled && !ch.forEachRow)
+            add(i, "error", `step[${si}] run_a_data_action trên lịch cần 'forEachRow' (bật For Each Row In Table).`);
+          if (s.custom) {
+            if (s.table && tableNames.size && !tableNames.has(s.table)) add(i, "warn", `step[${si}].table không tồn tại: ${s.table}`);
+            if (s.rows != null && typeof s.rows !== "string") add(i, "error", `step[${si}].rows phải là chuỗi.`);
+          } else {
+            delete s.table; // existing mode: only the action name is needed
+            delete s.rows;
+          }
         }
       });
       norm.push(ch);
@@ -553,6 +706,9 @@ export function summarize(ch: Change): string {
   }
   if (ch.op === "set_view") return `set_view  "${ch.view}"`;
   if (ch.op === "add_format_rule") return `add_format_rule  "${ch.name}" @ ${ch.table}`;
-  if (ch.op === "add_bot") return `add_bot  "${ch.name}" @ ${ch.table}  (${ch.steps?.length ?? 0} steps)`;
+  if (ch.op === "add_bot") {
+    const where = ch.eventType === "scheduled" ? `⏰ ${ch.frequency ?? "scheduled"}` : `@ ${ch.table}`;
+    return `add_bot  "${ch.name}" ${where}  (${ch.steps?.length ?? 0} steps)`;
+  }
   return `set_format_rule  "${ch.rule}"`;
 }
