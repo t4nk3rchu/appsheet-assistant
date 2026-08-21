@@ -29,10 +29,22 @@ every name against the live app first. Supported ops:
 - **Actions** — `add_action`/`set_action` (all action types incl. COMPOSITE/grouped,
   SET_COLUMN_VALUE assignments, REF_ACTION, navigation).
 - **Format rules** — `add_format_rule`/`set_format_rule`.
+- **Bots / Automation** — `add_bot` with a **data-change** event (`table`, `condition`,
+  `dataChangeType`) or a **scheduled** event (frequency + time/day/week/timezone,
+  optional **For Each Row In Table**), plus process steps:
+  - **Run a task** — email (`to`/`cc`/`bcc`/`subject`/`body`, `Reply To`, `From` name,
+    …), notification (title/body/deep-link), or webhook (url/verb/contentType/body/headers).
+  - **Run a data action** — an existing action, or a custom run-action-on-rows.
 
-The full changeset format (per-op fields, examples) is documented in the
+**Idempotent re-runs.** Running the same changeset twice does not create duplicates:
+`add_view` / `add_action` / `add_slice` / `add_format_rule` **upsert** (open the
+existing same-named item and update it in place); `add_virtual_column` and `add_bot`
+**skip** if the name already exists (use `set_column` to update a virtual column).
+
+The full changeset format (per-op fields, examples) is documented in
+[`instruction.md`](./instruction.md) in this repo (mirrored into the
 [AppSheet Architect skill](https://github.com/t4nk3rchu/appsheet-architect)'s
-`references/extension-changeset.md`.
+`references/extension-changeset.md`).
 
 ## Icons
 
