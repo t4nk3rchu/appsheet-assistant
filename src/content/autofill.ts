@@ -2722,6 +2722,21 @@ async function afFillBot(ch: Change): Promise<OpResult> {
     failed.push("event");
   }
 
+  // The event Condition is set via the Expression Assistant modal; make sure it
+  // (and its backdrop) is fully closed before the process steps — otherwise
+  // "Add a step" is swallowed behind the lingering backdrop and the bot ends up
+  // with no steps (condition set → step-add fails; no condition → fine).
+  {
+    const t0 = performance.now();
+    while (
+      performance.now() - t0 < 4000 &&
+      (document.querySelector(".ExpressionControlModal") || document.querySelector(".MuiBackdrop-root"))
+    ) {
+      await ttSleep(150);
+    }
+    await ttSleep(400);
+  }
+
   // Process steps
   for (const st of (ch.steps || []) as any[]) {
     if (!(await afBotAddStep())) {
