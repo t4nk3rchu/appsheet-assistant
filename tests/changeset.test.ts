@@ -321,4 +321,27 @@ describe("validateChangeset add_bot", () => {
   it("summarizes with step count", () => {
     expect(summarize({ op: "add_bot", table: "VĂN_BẢN", name: "B", steps: [{ action: "A" }, { action: "B" }] } as any)).toContain("2 steps");
   });
+
+  const bot = (dct: any) => ({ op: "add_bot", table: "VĂN_BẢN", name: "B", dataChangeType: dct, steps: [{ action: "A" }] });
+
+  it("normalizes dataChangeType array + string aliases to a canonical subset", () => {
+    const r1 = validateChangeset(tables, [bot(["updates", "Adds"]) as any]);
+    expect(r1.ok).toBe(true);
+    expect((r1.normalized[0] as any).dataChangeType).toEqual(["Updates", "Adds"]);
+
+    const r2 = validateChangeset(tables, [bot("Adds and updates") as any]);
+    expect(r2.ok).toBe(true);
+    expect((r2.normalized[0] as any).dataChangeType).toEqual(["Adds", "Updates"]);
+
+    // omitted → field dropped (AppSheet default = all changes)
+    const r3 = validateChangeset(tables, [bot(undefined) as any]);
+    expect(r3.ok).toBe(true);
+    expect((r3.normalized[0] as any).dataChangeType).toBeUndefined();
+  });
+
+  it("rejects empty array, unknown token, and unknown alias", () => {
+    expect(validateChangeset(tables, [bot([]) as any]).ok).toBe(false);
+    expect(validateChangeset(tables, [bot(["Adds", "Nope"]) as any]).ok).toBe(false);
+    expect(validateChangeset(tables, [bot("sometimes") as any]).ok).toBe(false);
+  });
 });

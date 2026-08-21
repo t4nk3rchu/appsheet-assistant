@@ -2717,6 +2717,39 @@ async function afSetStepTaskType(): Promise<boolean> {
   return afPickMenuItem(/^\s*run a data action\s*$/i);
 }
 
+/** Set the event's "Data change type" — a role="listbox" of three
+ *  .CardSelectControl[role="option"] cards (Adds/Deletes/Updates) each carrying
+ *  aria-selected. `wanted` is the canonical non-empty subset that should be ON;
+ *  toggle the mismatched cards — ADDITIONS first so we never pass through a
+ *  zero-selected state (AppSheet requires at least one). */
+async function afSetDataChangeType(wanted: string[]): Promise<boolean> {
+  const box = document.querySelector('.FormControl[data-label="Data change type"]');
+  if (!box) return false;
+  const opts = Array.from(box.querySelectorAll<HTMLElement>('[role="option"]'));
+  const find = (rx: RegExp) => opts.find((o) => rx.test((o.textContent || "").trim()));
+  const cards = { Adds: find(/^adds/i), Deletes: find(/^deletes/i), Updates: find(/^updates/i) };
+  if (!cards.Adds || !cards.Deletes || !cards.Updates) return false;
+
+  const has = (k: string) => wanted.some((w) => w.toLowerCase() === k.toLowerCase());
+  const want = { Adds: has("Adds"), Deletes: has("Deletes"), Updates: has("Updates") };
+
+  const keys = ["Adds", "Deletes", "Updates"] as const;
+  for (const pass of [true, false]) {
+    // pass=true: turn ON missing cards; pass=false: turn OFF extras
+    for (const k of keys) {
+      const card = cards[k]!;
+      const on = card.getAttribute("aria-selected") === "true";
+      if (want[k] === pass && on !== want[k]) {
+        // SINGLE native click — each click toggles, so afHit's native+synthetic
+        // double-fire would toggle twice and land back where it started.
+        card.click();
+        await ttSleep(200);
+      }
+    }
+  }
+  return true;
+}
+
 async function afFillBot(ch: Change): Promise<OpResult> {
   const chAny = ch as any;
   if (!(await afGotoBots())) return { ok: false, reason: "Không mở được Automation → Bots." };
@@ -2767,10 +2800,10 @@ async function afFillBot(ch: Change): Promise<OpResult> {
         await ttSleep(150);
       }
     }
-    // ponytail: dataChangeType left at AppSheet's default. The control is 3
-    // checkboxes (Adds/Updates/Deletes); wire subset selection if a user needs
-    // a non-default set.
-    if (chAny.dataChangeType && !/all changes/i.test(chAny.dataChangeType)) failed.push("dataChangeType (để mặc định)");
+    if (Array.isArray(chAny.dataChangeType) && chAny.dataChangeType.length) {
+      if (!(await afSetDataChangeType(chAny.dataChangeType))) failed.push("dataChangeType");
+      await ttSleep(150);
+    }
   } else {
     failed.push("event");
   }

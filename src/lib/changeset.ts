@@ -122,7 +122,10 @@ export interface Change {
   // add_bot — data-change automation. Reuses table (event table/slice),
   // name (bot name), condition (event Condition).
   eventName?: string; // event display name (default auto "New event N")
-  dataChangeType?: string; // Adds only | Updates only | Deletes only | Adds and updates | All changes
+  // Which data changes fire the event. Canonical form is a non-empty subset of
+  // ["Adds","Deletes","Updates"] (default = all three). A legacy string alias
+  // ("Adds and updates", etc.) is accepted on input and normalized to the array.
+  dataChangeType?: string[];
   bypassSecurity?: boolean; // "Bypass security filters?" toggle
   steps?: BotStep[]; // process steps (run_a_data_action)
 }
@@ -430,9 +433,44 @@ export function validateChangeset(tables: Table[], changes: unknown): Validation
       if (!ch.eventName) delete ch.eventName;
       if (ch.condition != null && typeof ch.condition !== "string") add(i, "error", "'condition' phải là chuỗi.");
       if (!ch.condition) delete ch.condition;
-      const DCT = ["Adds only", "Updates only", "Deletes only", "Adds and updates", "All changes"];
-      if (ch.dataChangeType && !DCT.some((d) => d.toLowerCase() === String(ch.dataChangeType).toLowerCase()))
-        add(i, "warn", `dataChangeType không rõ: ${ch.dataChangeType} (mặc định All changes)`);
+      // dataChangeType: normalize to a canonical non-empty subset of
+      // ["Adds","Deletes","Updates"]. Accept an array of those (any case) OR a
+      // legacy alias string. Unknown token or empty set = hard error (no silent
+      // fallback to All changes).
+      {
+        const dct: any = (ch as any).dataChangeType;
+        const CANON: Record<string, string> = { adds: "Adds", deletes: "Deletes", updates: "Updates" };
+        const ALIAS: Record<string, string[]> = {
+          "all changes": ["Adds", "Deletes", "Updates"],
+          "adds only": ["Adds"],
+          "updates only": ["Updates"],
+          "deletes only": ["Deletes"],
+          "adds and updates": ["Adds", "Updates"],
+          "adds and deletes": ["Adds", "Deletes"],
+          "deletes and updates": ["Deletes", "Updates"],
+        };
+        let arr: string[] | null = null;
+        if (dct == null || dct === "") {
+          /* omitted → AppSheet default (all changes) */
+        } else if (typeof dct === "string") {
+          const a = ALIAS[dct.trim().toLowerCase()];
+          if (!a) add(i, "error", `dataChangeType không hợp lệ: ${dct}`);
+          else arr = a;
+        } else if (Array.isArray(dct)) {
+          const out: string[] = [];
+          for (const t of dct) {
+            const c = CANON[String(t).trim().toLowerCase()];
+            if (!c) add(i, "error", `dataChangeType phần tử không hợp lệ: ${t} (Adds|Deletes|Updates)`);
+            else if (!out.includes(c)) out.push(c);
+          }
+          if (out.length === 0) add(i, "error", "dataChangeType rỗng — cần ít nhất 1 (Adds|Deletes|Updates).");
+          else arr = out;
+        } else {
+          add(i, "error", "'dataChangeType' phải là mảng [Adds|Deletes|Updates] hoặc chuỗi.");
+        }
+        if (arr) ch.dataChangeType = arr;
+        else delete ch.dataChangeType;
+      }
       if (!Array.isArray(ch.steps) || ch.steps.length === 0) return add(i, "error", "add_bot cần ít nhất 1 step.");
       ch.steps.forEach((s, si) => {
         if (!s || typeof s !== "object") return add(i, "error", `step[${si}] không hợp lệ.`);
