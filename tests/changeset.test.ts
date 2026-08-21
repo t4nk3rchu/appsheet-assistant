@@ -391,6 +391,26 @@ describe("validateChangeset add_bot", () => {
     expect(validateChangeset(tables, [{ op: "add_bot", name: "T3", eventType: "scheduled", frequency: "Daily", steps: [{ task: "sms" }] } as any]).ok).toBe(false);
   });
 
+  it("email cc/bcc: normalize to arrays; strip on non-email tasks", () => {
+    const r = validateChangeset(tables, [
+      { op: "add_bot", name: "CC1", eventType: "scheduled", frequency: "Daily",
+        steps: [{ task: "email", to: "a@x.com", cc: "b@x.com", bcc: ["c@x.com", "  ", "d@x.com"], subject: "Hi" }] } as any,
+    ]);
+    expect(r.ok).toBe(true);
+    const s = (r.normalized[0] as any).steps[0];
+    expect(s.cc).toEqual(["b@x.com"]);
+    expect(s.bcc).toEqual(["c@x.com", "d@x.com"]);
+    // cc/bcc dropped on a webhook task
+    const w = validateChangeset(tables, [
+      { op: "add_bot", name: "CC2", eventType: "scheduled", frequency: "Daily",
+        steps: [{ task: "webhook", url: "https://x", cc: "b@x.com", bcc: "c@x.com" }] } as any,
+    ]);
+    expect(w.ok).toBe(true);
+    const ws = (w.normalized[0] as any).steps[0];
+    expect(ws.cc).toBeUndefined();
+    expect(ws.bcc).toBeUndefined();
+  });
+
   it("scheduled data-action step requires forEachRow; forEachRow validates table", () => {
     // data-action step on a schedule without forEachRow → error
     expect(validateChangeset(tables, [{ op: "add_bot", name: "F1", eventType: "scheduled", frequency: "Daily", steps: [{ action: "A" }] } as any]).ok).toBe(false);

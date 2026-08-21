@@ -169,6 +169,8 @@ export interface BotStep {
   // ── Run a task ──
   task?: "email" | "notification" | "webhook"; // presence ⇒ "Run a task"
   to?: string | string[]; // email/notification recipients (expressions)
+  cc?: string | string[]; // email CC (expressions)
+  bcc?: string | string[]; // email BCC (expressions)
   subject?: string; // email
   title?: string; // notification
   body?: string; // email/notification/webhook
@@ -610,12 +612,16 @@ export function validateChangeset(tables: Table[], changes: unknown): Validation
           }
           if ((s.task === "email" || s.task === "notification") && !s.to)
             add(i, "warn", `step[${si}] (${s.task}) không có 'to' — dùng mặc định của AppSheet.`);
-          // normalize `to` to string[]
-          if (s.to != null) {
-            const arr = (Array.isArray(s.to) ? s.to : [s.to]).map((x) => String(x).trim()).filter(Boolean);
-            if (arr.length) (s as any).to = arr;
-            else delete (s as any).to;
+          // normalize recipient lists to string[]
+          for (const f of ["to", "cc", "bcc"] as const) {
+            if ((s as any)[f] == null) continue;
+            const raw = (s as any)[f];
+            const arr = (Array.isArray(raw) ? raw : [raw]).map((x) => String(x).trim()).filter(Boolean);
+            if (arr.length) (s as any)[f] = arr;
+            else delete (s as any)[f];
           }
+          // cc/bcc only apply to email
+          if (s.task !== "email") { delete (s as any).cc; delete (s as any).bcc; }
           if (s.taskProps != null && (typeof s.taskProps !== "object" || Array.isArray(s.taskProps)))
             add(i, "error", `step[${si}].taskProps phải là object {label: value}.`);
           // drop data-action-only fields

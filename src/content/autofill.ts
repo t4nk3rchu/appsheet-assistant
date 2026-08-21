@@ -275,6 +275,13 @@ function afSetText(input: HTMLInputElement | null, value: string): boolean {
   else input.value = value;
   input.dispatchEvent(new Event("input", { bubbles: true }));
   input.dispatchEvent(new Event("change", { bubbles: true }));
+  // Also fire React's own onChange via the fiber props — DOM events alone don't
+  // update the component state for controlled inputs like DynamicExpressionControl.
+  try {
+    const rk = Object.keys(input).find((k) => k.indexOf("__reactProps$") === 0);
+    const rp: any = rk ? (input as any)[rk] : null;
+    if (rp?.onChange) rp.onChange({ target: input, currentTarget: input, type: "change", nativeEvent: new Event("change") });
+  } catch { /* ignore */ }
   try {
     input.blur();
   } catch {
@@ -605,11 +612,14 @@ async function afSetRefTable(panel: Element, table: string): Promise<boolean> {
  *  sections if the control isn't visible yet. Returns false if not found or the
  *  control kind isn't one we drive (e.g. the OrderedList "Values" editor). */
 async function afSetPanelProp(panel: Element, label: string, value: string): Promise<boolean> {
-  let fc = panel.querySelector<HTMLElement>(`.FormControl[data-label="${label}"]`);
-  if (!fc) {
+  // Single-quote wrapper so labels with double-quotes (e.g. Customize "From" name) are valid selectors.
+  const fcSel = `.FormControl[data-label='${label.replace(/'/g, "\\'")}']`;
+  let fc = panel.querySelector<HTMLElement>(fcSel);
+  // Expand collapsed sections if fc is absent OR found-but-hidden (e.g. "Other email parameters").
+  if (!fc || fc.offsetParent === null) {
     for (const sec of panel.querySelectorAll(".FormSection.Collapsed > .CollapseExpandButton")) ttClick(sec);
     await ttSleep(200);
-    fc = panel.querySelector<HTMLElement>(`.FormControl[data-label="${label}"]`);
+    fc = panel.querySelector<HTMLElement>(fcSel);
   }
   if (!fc) return false;
   const v = String(value);
@@ -644,8 +654,10 @@ async function afSetPanelProp(panel: Element, label: string, value: string): Pro
   }
   // Segmented buttons (e.g. LongText "Formatting" = Plain Text/Markdown/HTML,
   // "Image shape", …): an .EnumControl of .EnumOption[data-value] radio buttons.
+  // Skip if the EnumControl is a flask toggle (has expression/normal options) — fall
+  // through to the input/expression paths so the actual value field gets set.
   const enumCtrl = fc.querySelector(".EnumControl");
-  if (enumCtrl) {
+  if (enumCtrl && !enumCtrl.querySelector('.EnumOption[data-value="expression"]')) {
     if (enumCtrl.getAttribute("data-value") === v) return true;
     const opt = enumCtrl.querySelector<HTMLElement>(`.EnumOption[data-value="${v}"]`);
     if (!opt) return false;
@@ -671,14 +683,19 @@ async function afSetPanelProp(panel: Element, label: string, value: string): Pro
     const inp = await afFlipToExpr(esw);
     if (inp) return afSetExpression(inp, v);
   }
-  // Expression fields are usually a readonly <input>, but some (e.g. a task's
-  // Email Subject/Body, notification Title/Body) use a readonly <textarea>.
+  // Expression fields: readonly inputs/textareas that open the Expression Assistant.
+  // Use [readonly] so editable inputs (e.g. "Reply To" DynamicExpressionControl) fall
+  // through to the plainInp path and get committed via afSetText + React props onChange.
   const exprInp = fc.querySelector<HTMLInputElement | HTMLTextAreaElement>(
-    EXPR_INP_SEL + ', textarea.MuiInputBase-input:not([aria-hidden="true"])',
+    '.ExpressionControl input[readonly], input.MuiOutlinedInput-input[readonly], input.MuiInputBase-input[readonly],' +
+    ' textarea.MuiInputBase-input:not([aria-hidden="true"])',
   );
   if (exprInp) return afSetExpression(exprInp, v);
   const mui = fc.querySelector<HTMLElement>('.MuiSelect-select[role="button"]');
   if (mui) return afMuiSelectSet(mui, v);
+  // Plain React-controlled input (e.g. "Customize "From" name", "Reply To" static mode).
+  const plainInp = fc.querySelector<HTMLInputElement>('input.MuiInputBase-input:not([aria-hidden="true"])');
+  if (plainInp) return afSetText(plainInp, v);
   return false;
 }
 
@@ -1005,7 +1022,14 @@ async function afClickAddVcol(): Promise<boolean> {
 async function afFillAdd(ch: Change): Promise<OpResult> {
   await afGotoSection("data");
   if (!(await ttOpenTable(ch.table!))) return { ok: false, reason: "Không mở được bảng " + ch.table };
-  if (!ttFindGrid()) return { ok: false, reason: "Không thấy grid cột" };
+  const grid = ttFindGrid();
+  if (!grid) return { ok: false, reason: "Không thấy grid cột" };
+  // Idempotency: a virtual column IS a grid column, so if one with this name
+  // already exists, skip rather than create a duplicate. ponytail: skip-only —
+  // use set_column to UPDATE an existing (virtual) column's formula/type.
+  if (ch.name && (await ttFindRow(ch.name, undefined, grid))) {
+    return { ok: true, reason: `Cột "${ch.name}" đã tồn tại — bỏ qua. Dùng set_column để cập nhật.` };
+  }
   // Wait for the columns panel to settle, then trigger Add virtual column
   // (direct button when wide, ⋮ overflow menu when narrow — our usual case).
   await afWaitFor('button[title="Add virtual column"], #appData .MuiIconButton-root', 6000);
@@ -1299,18 +1323,22 @@ async function afFillFormatRule(ch: Change): Promise<OpResult> {
         reason: "Không tìm thấy format rule " + ch.rule + " — kiểm tra tên trong UX → Format rules.",
       };
   } else {
-    const addBtn = document.querySelector('button[aria-label="Add Format Rule"]');
-    if (!addBtn) return { ok: false, reason: "Không thấy nút Add Format Rule." };
-    ttClick(addBtn);
-    const createBtn = await afWaitFor('[role="dialog"] button[aria-label="create new"]', 5000);
-    if (!createBtn) return { ok: false, reason: "Không mở được hộp thoại Add Format Rule." };
-    ttClick(createBtn);
-    pane = await afWaitFmtPane();
-    if (!pane) return { ok: false, reason: "Không mở được trình sửa Format Rule." };
-    // Wait for the fresh rule's fields to actually render before filling — on
-    // Firefox/Zen they lag the pane, which was silently dropping name/table.
-    await afWaitFor('.FormControl[data-label="Rule name"] input', 6000);
-    await ttSleep(250);
+    // Upsert: reuse an existing same-named rule rather than creating a duplicate.
+    pane = ch.name ? await afOpenFormatRule(ch.table, ch.name) : null;
+    if (!pane) {
+      const addBtn = document.querySelector('button[aria-label="Add Format Rule"]');
+      if (!addBtn) return { ok: false, reason: "Không thấy nút Add Format Rule." };
+      ttClick(addBtn);
+      const createBtn = await afWaitFor('[role="dialog"] button[aria-label="create new"]', 5000);
+      if (!createBtn) return { ok: false, reason: "Không mở được hộp thoại Add Format Rule." };
+      ttClick(createBtn);
+      pane = await afWaitFmtPane();
+      if (!pane) return { ok: false, reason: "Không mở được trình sửa Format Rule." };
+      // Wait for the fresh rule's fields to actually render before filling — on
+      // Firefox/Zen they lag the pane, which was silently dropping name/table.
+      await afWaitFor('.FormControl[data-label="Rule name"] input', 6000);
+      await ttSleep(250);
+    }
   }
   await ttSleep(120);
   const failed: string[] = [];
@@ -1888,8 +1916,22 @@ async function afSelectTaskTile(label: string): Promise<boolean> {
  *  that looks like an AppSheet expression (has ()/[]) is entered in EXPRESSION
  *  mode (flip the flask, then use the Expression Assistant); a plain literal
  *  (e.g. an email address) stays in normal text mode. */
+/** Expand any collapsed FormSection so the control with `label` becomes visible
+ *  (e.g. CC/BCC hide inside the collapsed "Other email parameters" section). */
+async function afExpandFor(label: string): Promise<void> {
+  const fc = document.querySelector<HTMLElement>(`.FormControl[data-label='${label.replace(/'/g, "\\'")}']`);
+  if (fc && fc.offsetParent !== null) return; // already visible
+  for (const sec of document.querySelectorAll(".FormSection.Collapsed > .CollapseExpandButton")) {
+    ttClick(sec);
+    await ttSleep(120);
+    if (fc && fc.offsetParent !== null) return;
+  }
+  await ttSleep(150);
+}
+
 async function afFillExprList(label: string, values: string[]): Promise<boolean> {
-  const list = document.querySelector<HTMLElement>(`.FormControl[data-label="${label}"] .OrderedListControl`);
+  await afExpandFor(label); // CC/BCC live in the collapsed "Other email parameters" section
+  const list = document.querySelector<HTMLElement>(`.FormControl[data-label='${label.replace(/'/g, "\\'")}'] .OrderedListControl`);
   if (!list) return false;
   const items = list.querySelector<HTMLElement>(".ListItems");
   const addBtn = list.querySelector<HTMLButtonElement>("button.ListAddItem");
@@ -2048,14 +2090,19 @@ async function afFillView(ch: Change): Promise<OpResult> {
   if (!(await afGotoViews())) return { ok: false, reason: "Không mở được UX → Views (không thấy nút Add View)." };
   let pane: Element | null;
   if (ch.op === "add_view") {
-    pane = await afCreateView();
-    if (!pane) return { ok: false, reason: "Không tạo được view mới (không thấy nút Add View / dialog)" };
-    const nameInp = afVfeNameInput();
-    if (nameInp && ch.name) {
-      afSetText(nameInp, ch.name);
-      await ttSleep(240);
+    // Upsert: if a view with this name already exists, open + update it instead
+    // of creating a duplicate (re-running a changeset should be idempotent).
+    pane = ch.name ? await afOpenView(ch.name) : null;
+    if (!pane) {
+      pane = await afCreateView();
+      if (!pane) return { ok: false, reason: "Không tạo được view mới (không thấy nút Add View / dialog)" };
+      const nameInp = afVfeNameInput();
+      if (nameInp && ch.name) {
+        afSetText(nameInp, ch.name);
+        await ttSleep(240);
+      }
+      pane = afVfe();
     }
-    pane = afVfe();
   } else {
     if (!ch.view) return { ok: false, reason: "set_view thiếu tên view." };
     pane = await afOpenView(ch.view);
@@ -2215,8 +2262,18 @@ async function afSliceRowFilter(pane: Element, value: string): Promise<boolean> 
 async function afFillSlice(ch: Change): Promise<OpResult> {
   await afGotoSection("data");
   await ttSleep(200);
-  let pane: Element | null;
+  let pane: Element | null = null;
   if (ch.op === "add_slice") {
+    // Upsert: if a slice with this name already exists, open + update it instead of
+    // creating a duplicate. Verify the opened pane's name matches — afOpenSlice
+    // hash-routes and could otherwise return a stale pane for a non-existent slice.
+    if (ch.name) {
+      const ex = await afOpenSlice(ch.name);
+      const nm = ex ? afVfeCtrl(ex, "Slice Name")?.querySelector<HTMLInputElement>("input") : null;
+      if (ex && nm && ttSame(nm.value, ch.name)) pane = ex;
+    }
+  }
+  if (ch.op === "add_slice" && !pane) {
     // Each table row has its OWN "Add Slice" button → opens a table-scoped
     // dialog. Pick the one whose tree item matches the target table.
     const norm = (s: unknown) => String(s || "").trim().toLowerCase();
@@ -2251,11 +2308,12 @@ async function afFillSlice(ch: Change): Promise<OpResult> {
         await ttSleep(200);
       }
     }
-  } else {
+  } else if (ch.op === "set_slice") {
     if (!ch.slice) return { ok: false, reason: "set_slice thiếu tên slice." };
     pane = await afOpenSlice(ch.slice);
     if (!pane) return { ok: false, reason: "Không mở được slice " + ch.slice };
   }
+  if (!pane) return { ok: false, reason: "Slice pane không tìm thấy." };
   await ttSleep(90);
 
   const failed: string[] = [];
@@ -2336,6 +2394,12 @@ async function afOpenAction(table: string | undefined, name: string): Promise<El
     for (const li of document.querySelectorAll("#BehaviorPane li[aria-label]")) {
       if (ttSame(li.getAttribute("aria-label"), table)) {
         scope = li;
+        // Expand the table group if collapsed — its action children aren't in the
+        // DOM until then, so the search below would miss them (mirrors afOpenFormatRule).
+        if (li.getAttribute("aria-expanded") === "false") {
+          ttClick(li.querySelector(".MuiTreeItem-content") || li);
+          await ttSleep(400);
+        }
         break;
       }
     }
@@ -2438,14 +2502,18 @@ async function afFillAction(ch: Change): Promise<OpResult> {
   await afGotoSection("behavior");
   let pane: Element | null;
   if (ch.op === "add_action") {
-    pane = await afCreateAction(ch.table || "");
-    if (!pane) return { ok: false, reason: "Không tạo được action mới (không thấy nút Add Action cho " + ch.table + ")" };
-    const ni = afActNameInput();
-    if (ni && ch.name) {
-      afSetText(ni, ch.name);
-      await ttSleep(240);
+    // Upsert: reuse an existing same-named action rather than creating a duplicate.
+    pane = ch.name ? await afOpenAction(ch.table, ch.name) : null;
+    if (!pane) {
+      pane = await afCreateAction(ch.table || "");
+      if (!pane) return { ok: false, reason: "Không tạo được action mới (không thấy nút Add Action cho " + ch.table + ")" };
+      const ni = afActNameInput();
+      if (ni && ch.name) {
+        afSetText(ni, ch.name);
+        await ttSleep(240);
+      }
+      pane = afActPane();
     }
-    pane = afActPane();
   } else {
     if (!ch.action) return { ok: false, reason: "set_action thiếu tên action." };
     pane = await afOpenAction(ch.table, ch.action);
@@ -2981,9 +3049,12 @@ async function afFillTaskStep(s: any): Promise<string[]> {
     }
   }
 
-  if (s.to != null) {
-    const vals = Array.isArray(s.to) ? s.to : [s.to];
-    if (!(await afFillExprList("To", vals.map(String)))) bad.push("to");
+  // Recipient lists (To/CC/BCC) — each an OrderedList of expression rows.
+  for (const [key, label] of [["to", "To"], ["cc", "CC"], ["bcc", "BCC"]] as const) {
+    const raw = (s as any)[key];
+    if (raw == null) continue;
+    const vals = (Array.isArray(raw) ? raw : [raw]).map(String);
+    if (!(await afFillExprList(label, vals))) bad.push(key);
   }
   // Scalar fields → their exact editor labels, driven generically.
   const map: Record<string, [string, any]> =
@@ -3011,6 +3082,19 @@ async function afFillTaskStep(s: any): Promise<string[]> {
 async function afFillBot(ch: Change): Promise<OpResult> {
   const chAny = ch as any;
   if (!(await afGotoBots())) return { ok: false, reason: "Không mở được Automation → Bots." };
+
+  // Idempotency: if a bot with this name already exists, SKIP rather than create
+  // a duplicate. ponytail: skip-if-exists only — full in-place bot editing
+  // (updating the existing event + matching/updating steps) is a separate feature;
+  // re-running would otherwise duplicate the whole automation, event, and steps.
+  if (ch.name) {
+    const existing = Array.from(document.querySelectorAll<HTMLElement>(".MuiTreeItem-content")).find((el) => {
+      const raw = (el.textContent || "").trim();
+      if (/\(\d+\)\s*$/.test(raw)) return false; // group headers
+      return ttSame(raw, ch.name!);
+    });
+    if (existing) return { ok: true, reason: `Bot "${ch.name}" đã tồn tại — bỏ qua (không tạo trùng).` };
+  }
 
   const createBtn = document.querySelector<HTMLElement>(
     'button[aria-label="Create a new automation"], button[title="Create a new automation"]',
