@@ -2551,27 +2551,61 @@ async function afSetBotName(name: string): Promise<boolean> {
   return ok;
 }
 
-/** Configure the bot's event so its config renders in the right pane. Fresh bot:
- *  "Configure event" → suggestions popup → "Create a new event" (same "Create a
- *  new X" pattern as bots/views/slices). Already-configured: click the event card. */
+/** The visible "Create a new X" suggestions combobox textarea (aria-label
+ *  "Table Slice Name"). Both the bot EVENT picker and each STEP picker reveal
+ *  one after their trigger button is clicked; clicking IT opens the popup. */
+function afSuggestCombo(): HTMLElement | null {
+  return (
+    Array.from(document.querySelectorAll<HTMLElement>('textarea[aria-label="Table Slice Name"]')).find(
+      (e) => e.offsetParent !== null,
+    ) ||
+    Array.from(document.querySelectorAll<HTMLElement>(".MuiTextField-root"))
+      .find((tf) => tf.querySelector("label")?.textContent?.trim() === "Event name")
+      ?.querySelector<HTMLElement>("textarea") ||
+    null
+  );
+}
+
+/** Poll for afSuggestCombo until it appears (or timeout). */
+async function afWaitSuggestCombo(timeout = 3000): Promise<HTMLElement | null> {
+  const t0 = performance.now();
+  for (;;) {
+    const el = afSuggestCombo();
+    if (el) return el;
+    if (performance.now() - t0 > timeout) return null;
+    await ttSleep(120);
+  }
+}
+
+/** Configure the bot's event so its config renders in the right pane.
+ *  Unlike "Add a step" (one-stage: click → popup), "Configure event" is a
+ *  TWO-STAGE control: the first click SWAPS the button out for the "Event name"
+ *  combobox, so afHit's synthetic follow-up lands on a now-detached node and the
+ *  popup never opens (this is the intermittent "stuck at Configure event" bug).
+ *  Fix: click the button (stage 1 → reveals combobox), then click the combobox
+ *  textarea (stage 2 → opens the "Create a new event" popup), then pick it. */
 async function afOpenBotEvent(): Promise<boolean> {
   if (afCtrl("Table")) return true;
-  const cfg = afFindText(/^\s*configure event\s*$/i, "button");
-  if (cfg) {
-    afHit(cfg);
-    await ttSleep(700);
-  } else {
-    const card = document.querySelector<HTMLElement>(".AutomationEventCard");
-    if (card) {
-      afHit(card);
-      await ttSleep(500);
-    }
+
+  // Stage 1: reveal the combobox (fresh bot shows a "Configure event" button;
+  // a partially-opened bot may already show the combobox — then skip this).
+  const btn = afFindText(/^\s*configure event\s*$/i, "button");
+  if (btn && !afSuggestCombo()) {
+    afHit(btn);
+    await ttSleep(600);
   }
+
+  // Stage 2: click the revealed combobox textarea — THIS opens the popup.
+  const combo = (await afWaitSuggestCombo(3000)) || document.querySelector<HTMLElement>(".AutomationEventCard");
+  if (!combo) return false;
+  afHit(combo);
+  await ttSleep(600);
+
   // suggestions popup → "Create a new event"
-  const cne = await afWaitForText(/^\s*create a new event\s*$/i, 2500);
+  const cne = await afWaitForText(/^\s*create a new event\s*$/i, 3000, "li,span,div");
   if (cne) {
     afHit(cne);
-    await ttSleep(900);
+    await ttSleep(1000);
   }
   return !!(await afWaitFor('.FormControl[data-label="Table"]', 5000));
 }
@@ -2622,9 +2656,17 @@ function afClickTaskTile(label: string): boolean {
 async function afBotAddStep(): Promise<boolean> {
   const add = afFindText(/^\s*add a step\s*$/i, "button");
   if (!add) return false;
-  afHit(add);
-  await ttSleep(500);
-  const cns = await afWaitForText(/^\s*create a new step\s*$/i, 3000);
+  afHit(add); // stage 1: reveal the step's suggestions combobox
+  await ttSleep(600);
+  // stage 2: the "Add a step" button only REVEALS the "Table Slice Name"
+  // combobox; the popup opens on clicking the combobox (same two-stage pattern
+  // as Configure event). Without this the flow stalls at an empty step picker.
+  const combo = await afWaitSuggestCombo(2500);
+  if (combo) {
+    afHit(combo);
+    await ttSleep(600);
+  }
+  const cns = await afWaitForText(/^\s*create a new step\s*$/i, 3000, "li,span,div");
   if (!cns) return false;
   afHit(cns);
   await ttSleep(1000);
@@ -2705,6 +2747,17 @@ async function afFillBot(ch: Change): Promise<OpResult> {
     if (ch.condition) {
       const inp = afCtrl("Condition")?.querySelector<HTMLInputElement>(EXPR_INP_SEL);
       if (!(inp && (await afSetExpression(inp, ch.condition)))) failed.push("condition");
+      await ttSleep(200);
+    }
+    if (chAny.eventName) {
+      // After the event is created there are TWO "Event name" fields: the center
+      // picker combobox (a <textarea>) and the right Settings-pane rename field
+      // (an <input>). Pick the MuiTextField that actually holds an <input>.
+      const inp = Array.from(document.querySelectorAll<HTMLElement>(".MuiTextField-root"))
+        .filter((tf) => tf.querySelector("label")?.textContent?.trim() === "Event name")
+        .map((tf) => tf.querySelector<HTMLInputElement>("input"))
+        .find((i): i is HTMLInputElement => !!i);
+      if (!afSetText(inp ?? null, chAny.eventName)) failed.push("eventName");
       await ttSleep(200);
     }
     if (chAny.bypassSecurity) {

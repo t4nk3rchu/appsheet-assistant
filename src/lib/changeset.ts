@@ -121,6 +121,7 @@ export interface Change {
   confirmationMessage?: string;
   // add_bot — data-change automation. Reuses table (event table/slice),
   // name (bot name), condition (event Condition).
+  eventName?: string; // event display name (default auto "New event N")
   dataChangeType?: string; // Adds only | Updates only | Deletes only | Adds and updates | All changes
   bypassSecurity?: boolean; // "Bypass security filters?" toggle
   steps?: BotStep[]; // process steps (run_a_data_action)
@@ -425,6 +426,8 @@ export function validateChangeset(tables: Table[], changes: unknown): Validation
       if (!ch.name) return add(i, "error", "add_bot thiếu 'name'.");
       if (!ch.table) return add(i, "error", "add_bot thiếu 'table' (bảng của event).");
       if (tableNames.size && !tableNames.has(ch.table)) return add(i, "error", `Bảng không tồn tại: ${ch.table}`);
+      if (ch.eventName != null && typeof ch.eventName !== "string") add(i, "error", "'eventName' phải là chuỗi.");
+      if (!ch.eventName) delete ch.eventName;
       if (ch.condition != null && typeof ch.condition !== "string") add(i, "error", "'condition' phải là chuỗi.");
       if (!ch.condition) delete ch.condition;
       const DCT = ["Adds only", "Updates only", "Deletes only", "Adds and updates", "All changes"];
