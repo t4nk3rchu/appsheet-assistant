@@ -120,5 +120,5 @@ These are selector-level, resolved iteratively against the live editor (as with 
 ## Docs
 
 - `src/lib/prompts.ts` — add the `add_bot` op spec for the AI (schema, the "create actions first, then reference" rule, step.type note).
-- `D:\Claude\EcoTech\instruction.md` — extension changeset spec.
+- `D:\Claude\EcoTech\appsheet-assistant\instruction.md` — extension changeset spec (repo root; also tracked on GitHub).
 - appsheet-architect skill `references/extension-changeset.md` — mirror.
