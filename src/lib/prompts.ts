@@ -106,7 +106,7 @@ Return ONLY a single JSON object. No markdown fences, no prose, no comments. Sha
 {
   "changes": [
     {
-      "op": "set_column" | "add_virtual_column" | "add_format_rule" | "set_format_rule" | "set_table" | "add_view" | "set_view" | "add_slice" | "set_slice" | "add_action" | "set_action",
+      "op": "set_column" | "add_virtual_column" | "add_format_rule" | "set_format_rule" | "set_table" | "add_view" | "set_view" | "add_slice" | "set_slice" | "add_action" | "set_action" | "add_bot",
       "table": "ExistingTableName",
       "column": "existing_column_name (set_column)",
       "view": "ExistingViewName (set_view)",
@@ -179,7 +179,7 @@ ${renderActionTypeProps()}
 - op "add_slice" creates a slice (a filtered subset of a table); requires "table" (Source Table) + "name". Optional: "rowFilter" (a true/false expression selecting which rows the slice keeps, e.g. [status]="active"). op "set_slice" edits an existing slice; requires "slice" (its current name); optional table, rowFilter.
 - op "add_bot" creates an Automation bot with an event + one or more process steps. Requires "name" (bot name) + "steps" (non-empty array). "eventType" is "data_change" (default) or "scheduled". Shared optional: "eventName" (default auto "New event N"), "condition" (runs only when true), "bypassSecurity" (true/false).
   - DATA-CHANGE bots (default): also require "table" (the event table/slice). Optional "dataChangeType" — an ARRAY subset of ["Adds","Deletes","Updates"] (e.g. ["Adds","Updates"]); omit for all three.
-  - SCHEDULED bots ("eventType":"scheduled"): no "table". Require "frequency": one of "Hourly" | "Daily" | "Weekly" | "Monthly" | "Monthly by week". Frequency-specific fields: Hourly→"minuteOfHour" (0–59); Daily→"time" (e.g. "2:30 pm"); Weekly→"daysOfWeek" (array of Sun..Sat) + "time"; Monthly→"dayOfMonth" (1–31) + "time"; Monthly by week→"weekOfMonth" ("1st"|"2nd"|"3rd"|"4th"|"last") + "daysOfWeek" + "time". Optional "timeZone" (a substring of the dropdown label, e.g. "Bangkok" or "GMT+07"). AppSheet has no start/end-date field; omitted fields keep AppSheet defaults. "dataChangeType" is ignored for scheduled.
+  - SCHEDULED bots ("eventType":"scheduled"): no "table". Require "frequency": one of "Hourly" | "Daily" | "Weekly" | "Monthly" | "Monthly by week". Frequency-specific fields: Hourly→"minuteOfHour" (0–59); Daily→"time" (e.g. "2:30 pm"); Weekly→"daysOfWeek" (array of Sun..Sat) + "time"; Monthly→"dayOfMonth" (1–31) + "time"; Monthly by week→"weekOfMonth" ("1st"|"2nd"|"3rd"|"4th"|"last") + "daysOfWeek" + "time". Optional "timeZone" (a substring of the dropdown label, e.g. "SE Asia" or "GMT+07" — NOT a city like "Bangkok", which isn't in the list). AppSheet has no start/end-date field; omitted fields keep AppSheet defaults. "dataChangeType" is ignored for scheduled.
   - STEPS come in two kinds. (1) RUN A TASK — set "task": "email" | "notification" | "webhook". email: "to" (recipient expression or array), optional "cc"\"bcc" (same form as "to"; email only), "subject", "body". notification: "to", "title", "body", optional "deepLink". webhook: "url" (required), optional "verb" (GET|POST|…), "contentType", "body", "headers". Any other task field → "taskProps": {"<exact editor label>": "value"}. This is the NATURAL pairing for scheduled bots (send mail/notify/call a webhook on a schedule). (2) RUN A DATA ACTION — no "task"; (a) EXISTING action: "action" = an existing action ON THE BOT'S TABLE (create it earlier with add_action); or (b) CUSTOM run-on-rows: "custom":"run_action_on_rows" + "action" + "table" (Referenced Table) + "rows" (Referenced rows expression). On a SCHEDULED event a run-a-data-action step REQUIRES the event to enable For-Each-Row: set "forEachRow": {"table":"T", "condition":"<filter expr>"} on the add_bot. Put add_action changes BEFORE the add_bot that references them.
 - "sortBy"/"groupBy" (view): arrays of {column, order} where order is "Ascending" or "Descending" (default Ascending). Use EXISTING column names from the view's table. On set_view these APPEND rows (they don't replace existing ones).
 - Use table/column names EXACTLY as written in the schema below — do not shorten, pluralize, singularize, or change case (e.g. if the schema says "SKUS", never write "SKU"). NEVER invent names. If a needed name is missing, return {"changes": []}.
@@ -189,6 +189,7 @@ ${renderActionTypeProps()}
 - TEXT LITERALS must be wrapped in double quotes (AppSheet parses / - * + ( ) , < > = as operators). Quote displayName text, literal strings inside expressions, etc. Do NOT quote real expressions/[column] refs.
 - Only include fields the user asked to set; omit empty fields.
 - Wrap SELECT(...) in SORT(...) when order matters.
+- IDEMPOTENT: re-applying is safe. An add_view/add_action/add_slice/add_format_rule whose "name" already exists UPDATES that item in place (no duplicate); add_virtual_column and add_bot are SKIPPED if the name exists. To edit an existing view/action/slice/format-rule use the set_* op with its current name; to edit an existing (virtual) column use set_column.
 
 ${buildSchemaContext(tables)}
 

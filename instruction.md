@@ -100,9 +100,9 @@ Shared optional fields (both event kinds):
 **Steps** come in two kinds (each also takes an optional `name` display label):
 
 **Run a task** — set `task`: `"email"` | `"notification"` | `"webhook"`. This is the natural pairing for scheduled bots (send mail / notify / call a webhook on a schedule).
-- `email`: `to` (recipient expression or array of them), optional `cc` / `bcc` (same form as `to`; email only), `subject`, `body`.
+- `email`: `to` (recipient expression or array of them), optional `cc` / `bcc` (same form as `to`; email only), `subject`, `body`. More email fields via `taskProps` (exact labels): `Reply To`, `Customize "From" name`, `PreHeader`.
 - `notification`: `to`, `title`, `body`, optional `deepLink`.
-- `webhook`: `url` (required), optional `verb` (`GET`/`POST`/…), `contentType`, `body`, `headers`.
+- `webhook`: `url` (required), optional `verb` (`GET`/`POST`/…), `contentType` (AppSheet values: `JSON` (default) | `CSV` | `FORM_URL_ENCODED` | `HTML` | `PDF` | `XLSX` | `XML` | `ICS_CALENDAR` — MIME aliases like `application/json` are accepted), `body`, `headers`.
 - Any other task field → `taskProps`: `{ "<exact editor label>": "value" }`.
 
 **Run a data action** — no `task`:
@@ -219,6 +219,7 @@ Table view showing only chosen columns:
 Settings (⚙): AI provider + API key (BYOK: Gemini or DeepSeek); **Build App conventions** (always-on house rules injected into every generation); **Skills** (upload `.skill`/`.md` files or a `.zip` package — the AI reads each skill's description and applies matching ones).
 
 Notes & limits:
+- **Idempotent re-runs.** Applying the same changeset twice does not duplicate: `add_view`/`add_action`/`add_slice`/`add_format_rule` **upsert** (open the existing same-named item and update it in place); `add_virtual_column` and `add_bot` **skip** if the name already exists. To update an existing item, use the matching `set_*` op (`set_column` for a virtual column).
 - Structural changes only replay into the editor DOM; **the user must Save**. Row data is out of scope.
 - `sortBy`/`groupBy`/`viewEntries` **append** on `set_view` (they don't replace existing rows).
 - **Not yet supported:** table column **reordering** (`viewColumns` shows/hides only, order unchanged); slice columns/update-mode default to "all". CALL/SMS/EMAIL/OPEN_FILE fields work via `properties`.
