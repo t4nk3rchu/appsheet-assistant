@@ -27,8 +27,9 @@ unchanged, and if claude.ai isn't reachable the extension behaves as today.
   a browser tab), not the Anthropic API and not the desktop CLI.
 - Surface = **plain claude.ai chat** (not claude.ai/code).
 - Tab strategy = **extension-managed dedicated claude.ai tab**, **one persistent
-  conversation** (context accumulates; current schema re-fed when it changes).
-- Skill delivery = **user setting, 3 modes** (below); primer is the default.
+  conversation** managed in the chat session itself (context accumulates; current
+  schema re-fed when it changes). **No claude.ai Project** — plain chat only.
+- Skill delivery = **user setting, 2 modes** (below); primer is the default.
 - **Human-in-loop Apply** preserved: claude.ai only produces JSON into the box;
   the user still clicks Apply, then Save in AppSheet.
 
@@ -52,8 +53,8 @@ new process.
 - Locate the composer (ProseMirror `contenteditable`), set text, submit.
 - Detect response completion (streaming stop → copy/retry controls appear).
 - Extract the latest assistant message text → parse the JSON changeset.
-- Manage the conversation: start a new chat, or open inside a configured Project;
-  report login/usage-cap states.
+- Manage the conversation: start a new chat or continue the managed one; report
+  login/usage-cap states.
 
 **2. Background relay** (additions to `src/background/index.ts`):
 - Open / focus / track one **managed claude.ai tab** (store its `tabId`).
@@ -63,39 +64,37 @@ new process.
 **3. Sidebar** (Build tab, additions):
 - "Ask Claude (claude.ai)" action beside the existing Generate.
 - Status line: claude.ai tab present / logged in / conversation ready / generating.
-- Settings: **Skill source** (see below) + optional Project URL.
+- Settings: **Skill source** (see below) + configurable skill name.
 - Inbound changeset → existing Changeset box → existing validate → plan → **Apply**
   (engine + human gate + Save unchanged).
 
 **4. Prompt building** — reuse `changesetPrompt` (`src/lib/prompts.ts`) for the
 schema + ask + rules. Framing adapts to the skill-source mode.
 
-## Skill delivery — user setting (3 modes)
+## Skill delivery — user setting (2 modes)
 
 The extension cannot reliably detect what's configured in the user's claude.ai
-account, so **Skill source** is an explicit setting. Default = primer.
+account, so **Skill source** is an explicit setting. Default = primer. No
+claude.ai Project is involved — everything runs in a plain chat conversation.
 
 1. **Account skill** — the user has uploaded `appsheet-architect` via claude.ai
    Customize. Extension frames each ask as `"Use the appsheet-architect skill to:
-   {ask}"` + schema. No primer, no Project. (Skill name is configurable.)
-2. **Project** — the managed conversation lives inside a claude.ai Project
-   pre-loaded with the skill/spec. Extension opens the chat in that Project URL;
-   sends ask + schema.
-3. **Inject primer** (default) — on conversation start the extension sends the
+   {ask}"` + schema. No primer. (Skill name is configurable.)
+2. **Inject primer** (default) — on conversation start the extension sends the
    changeset spec + any selected Skills-box entries as the first message (reusing
    the existing skills-injection mechanism), then ask + schema. Self-contained,
    zero claude.ai setup.
 
 Schema is fed on the first turn and re-fed whenever it changes (hash-compare), in
-all three modes — accuracy never depends on chat history.
+both modes — accuracy never depends on chat history.
 
 ## Data flow
 
 ```
 1. Sidebar: user types ask → "Ask Claude (claude.ai)"
 2. Sidebar → background: {ask, schema, schemaHash}
-3. Background: ensure managed claude.ai tab (open/focus; Project mode → ensure in Project);
-   ensure conversation primed per Skill-source mode
+3. Background: ensure managed claude.ai tab (open/focus); ensure conversation
+   primed per Skill-source mode
 4. Background → claude-driver: {mode, primer?(first/changed), schema?(changed), ask}
 5. Driver: inject into composer → submit → wait for completion → extract JSON
 6. Driver → background → sidebar: {type:"changeset", json}  (or {error|needsLogin|usageCap})
@@ -142,11 +141,11 @@ behavior; claude.ai output only ever lands in the box behind the human Apply gat
 
 **In v1:**
 - `claude-driver.ts`: composer inject, completion detection, JSON extraction,
-  conversation/Project management, login/usage-cap detection.
+  conversation management (new/continue), login/usage-cap detection.
 - Background relay + managed-tab lifecycle + conversation state.
-- Sidebar "Ask Claude" action, status, Skill-source setting (+ Project URL),
+- Sidebar "Ask Claude" action, status, Skill-source setting (+ skill name),
   box/validate/plan/Apply reuse.
-- 3-mode skill delivery; persistent conversation; schema-on-change.
+- 2-mode skill delivery; persistent conversation; schema-on-change.
 
 **Out (later):**
 - Live streaming of Claude's thinking into the sidebar (v1 shows "generating…").
@@ -163,8 +162,8 @@ behavior; claude.ai output only ever lands in the box behind the human Apply gat
 - **Background relay** — message routing + managed-tab state (open/reopen,
   primed/schemaHash) unit-tested with mocked `browser.tabs`/messaging.
 - **Prompt framing** — unit-test that each Skill-source mode produces the right
-  prompt shape (account-skill prefix; project = no primer; primer = spec first
-  turn; schema re-fed on hash change).
+  prompt shape (account-skill prefix vs. primer = spec first turn; schema re-fed
+  on hash change).
 - **E2E (manual)** — happy path both a fresh and a warmed conversation;
   not-logged-in; tab-closed reopen; invalid-JSON; usage-cap; concurrent-ask
   guard.
@@ -174,7 +173,8 @@ behavior; claude.ai output only ever lands in the box behind the human Apply gat
 - claude.ai composer + "response complete" + message-extraction selectors
   (probe live; expect iteration, like the AppSheet driver).
 - How the driver starts a **new** conversation vs. continues the managed one
-  (URL nav vs. in-page "new chat" control) and how it re-enters a Project.
+  (URL nav vs. in-page "new chat" control), and how it re-locates the managed
+  conversation after a tab reopen (store the conversation URL/id).
 - Exact detection of the usage-cap / login-required states.
 - Whether the sidebar shows a compact live status from the driver ("thinking…"
   vs. just a spinner) in v1.
