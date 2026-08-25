@@ -24,17 +24,21 @@ export function hashSchema(tables: Table[]): string {
 export interface ClaudeTurnState {
   primed: boolean;
   schemaHash: string;
+  tabId: number;
 }
 
 /** Decide what this turn needs. `primed` in the RESULT = was the conversation
- *  already primed BEFORE this turn (so we can skip the spec). */
+ *  already primed BEFORE this turn (so we can skip the spec). Priming is
+ *  per-tab: if the current tab id differs from the one we primed, treat the
+ *  conversation as not primed (a different/new tab has no prior context). */
 export function decideTurn(
   prev: ClaudeTurnState | null,
   schemaHash: string,
+  tabId: number,
 ): { primed: boolean; schemaChanged: boolean; next: ClaudeTurnState } {
-  const primed = !!prev?.primed;
+  const primed = !!prev?.primed && prev.tabId === tabId;
   const schemaChanged = !prev || prev.schemaHash !== schemaHash;
-  return { primed, schemaChanged, next: { primed: true, schemaHash } };
+  return { primed, schemaChanged, next: { primed: true, schemaHash, tabId } };
 }
 
 /** Build the chat message text to send to claude.ai for this turn/mode. */

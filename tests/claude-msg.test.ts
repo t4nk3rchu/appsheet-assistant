@@ -30,21 +30,26 @@ describe("hashSchema", () => {
 
 describe("decideTurn", () => {
   it("first turn: not already primed, schema counts as changed", () => {
-    const r = decideTurn(null, "h1");
+    const r = decideTurn(null, "h1", 1);
     expect(r.primed).toBe(false);
     expect(r.schemaChanged).toBe(true);
-    expect(r.next).toEqual({ primed: true, schemaHash: "h1" });
+    expect(r.next).toEqual({ primed: true, schemaHash: "h1", tabId: 1 });
   });
-  it("second turn, same schema: primed, no schema change", () => {
-    const r = decideTurn({ primed: true, schemaHash: "h1" }, "h1");
+  it("second turn, same tab, same schema: primed, no schema change", () => {
+    const r = decideTurn({ primed: true, schemaHash: "h1", tabId: 1 }, "h1", 1);
     expect(r.primed).toBe(true);
     expect(r.schemaChanged).toBe(false);
   });
-  it("second turn, changed schema: primed, schema changed", () => {
-    const r = decideTurn({ primed: true, schemaHash: "h1" }, "h2");
+  it("second turn, same tab, changed schema: primed, schema changed", () => {
+    const r = decideTurn({ primed: true, schemaHash: "h1", tabId: 1 }, "h2", 1);
     expect(r.primed).toBe(true);
     expect(r.schemaChanged).toBe(true);
     expect(r.next.schemaHash).toBe("h2");
+  });
+  it("same schema but a different tab id: not primed (spec must be re-sent)", () => {
+    const r = decideTurn({ primed: true, schemaHash: "h1", tabId: 1 }, "h1", 2);
+    expect(r.primed).toBe(false);
+    expect(r.next).toEqual({ primed: true, schemaHash: "h1", tabId: 2 });
   });
 });
 
@@ -67,6 +72,13 @@ describe("buildClaudeMessage", () => {
     expect(m).toContain("appsheet-architect");
     expect(m).not.toContain("SPEC+RULES");
     expect(m).toContain("SCHEMA");
+    expect(m).toContain("add a bot");
+  });
+  it("account mode, unchanged schema: no spec, no schema, just the skill trigger + ask", () => {
+    const m = buildClaudeMessage({ ...base, mode: "account", alreadyPrimed: true, schemaChanged: false });
+    expect(m).not.toContain("SPEC+RULES");
+    expect(m).not.toContain("SCHEMA");
+    expect(m).toContain("appsheet-architect");
     expect(m).toContain("add a bot");
   });
 });

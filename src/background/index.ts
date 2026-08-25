@@ -51,14 +51,20 @@ async function ensureClaudeTab(): Promise<number> {
   claudeTurn = null; // fresh tab = fresh conversation
   const created = await browser.tabs.create({ url: "https://claude.ai/new", active: false });
   if (created.id == null) throw new Error("Could not open a claude.ai tab.");
-  // Wait for the driver content script to be injectable (tab finishes loading).
-  await new Promise<void>((resolve) => {
+  // Wait for the driver content script to be injectable (tab finishes loading),
+  // but don't hang forever if the tab never reaches "complete".
+  await new Promise<void>((resolve, reject) => {
     const onUpdated = (id: number, info: browser.Tabs.OnUpdatedChangeInfoType) => {
       if (id === created.id && info.status === "complete") {
         browser.tabs.onUpdated.removeListener(onUpdated);
+        clearTimeout(timer);
         resolve();
       }
     };
+    const timer = setTimeout(() => {
+      browser.tabs.onUpdated.removeListener(onUpdated);
+      reject(new Error("claude.ai tab did not finish loading"));
+    }, 15000);
     browser.tabs.onUpdated.addListener(onUpdated);
   });
   return created.id;
@@ -85,7 +91,7 @@ async function runClaudeAsk(msg: {
   try {
     const tabId = await ensureClaudeTab();
     const schemaHash = hashSchema(msg.tables);
-    const { primed, schemaChanged, next } = decideTurn(claudeTurn, schemaHash);
+    const { primed, schemaChanged, next } = decideTurn(claudeTurn, schemaHash, tabId);
     const text = buildClaudeMessage({
       mode: msg.mode, skillName: msg.skillName, system: msg.system,
       ask: msg.ask, schemaText: msg.schemaText, alreadyPrimed: primed, schemaChanged,
