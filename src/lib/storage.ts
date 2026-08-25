@@ -11,9 +11,14 @@ export interface Settings {
   // Persistent app conventions / guidance the AI reads before every Build App
   // generation (naming rules, preferred patterns, house style, …).
   buildInstructions: string;
+  // Claude (claude.ai) connector: how the changeset spec/skill reaches the chat.
+  // "primer" = inject the spec as the first message; "account" = trigger a skill
+  // the user uploaded via claude.ai Customize, by name.
+  claudeSkillSource: "primer" | "account";
+  claudeSkillName: string;
 }
 
-const DEFAULTS: Settings = { provider: "gemini", apiKeys: {}, baseUrls: {}, darkMode: false, lang: "vi", buildInstructions: "" };
+const DEFAULTS: Settings = { provider: "gemini", apiKeys: {}, baseUrls: {}, darkMode: false, lang: "vi", buildInstructions: "", claudeSkillSource: "primer", claudeSkillName: "appsheet-architect" };
 const S_KEY = "settings";
 const B_KEY = "backups";
 const SK_KEY = "skills";
