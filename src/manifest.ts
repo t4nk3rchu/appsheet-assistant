@@ -18,6 +18,7 @@ export function buildManifest(target: Target) {
       "https://www.appsheet.com/*",
       "https://generativelanguage.googleapis.com/*",
       "https://api.deepseek.com/*",
+      "https://claude.ai/*",
     ],
     content_scripts: [
       {
@@ -29,6 +30,11 @@ export function buildManifest(target: Target) {
         matches: ["https://www.appsheet.com/template/*", "https://www.appsheet.com/Template/*"],
         js: ["src/content/bridge.ts"],
         world: "MAIN",
+        run_at: "document_idle",
+      },
+      {
+        matches: ["https://claude.ai/*"],
+        js: ["src/content/claude-driver.ts"],
         run_at: "document_idle",
       },
     ],
@@ -57,9 +63,10 @@ export function buildManifest(target: Target) {
         // and Android (142+); also >= 128 that world:"MAIN" needs.
         id: "appsheet-copilot@gimasys.com",
         strict_min_version: "142.0",
-        // Data-collection disclosure. The AI-generation feature (optional, BYOK)
+        // Data-collection disclosure. The AI-generation feature (optional)
         // transmits the open app's structure + your prompt to the AI provider you
-        // configure. Everything else stays on-device.
+        // configure, OR to your own logged-in claude.ai session. Everything else
+        // stays on-device.
         // NOTE: verify this matches your intended disclosure in the AMO form.
         data_collection_permissions: { required: ["websiteContent"] },
       },
