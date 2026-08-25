@@ -41,27 +41,29 @@ export function decideTurn(
   return { primed, schemaChanged, next: { primed: true, schemaHash, tabId } };
 }
 
-/** Build the chat message text to send to claude.ai for this turn/mode. */
-export function buildClaudeMessage(args: {
-  mode: "primer" | "account";
+/** Build the chat message to send to claude.ai in SESSION mode, for any tool.
+ *  Leans on the conversation/skill rather than re-sending the full spec:
+ *  - skillSource "account": trigger the uploaded skill with a slash command
+ *    (`/<skillName> <prompt>`) — no spec/roleplay injected.
+ *  - skillSource "primer": inject the full `system` (spec/roleplay) ONCE on the
+ *    first turn (alreadyPrimed=false), then just the prompt.
+ *  Schema (schemaText) is included only for schema-dependent tools (needsSchema)
+ *  and only when it changed / wasn't sent yet — a one-time conversation prime. */
+export function buildSessionMessage(args: {
+  skillSource: "primer" | "account";
   skillName: string;
-  system: string; // full spec + rules (from changesetPrompt)
-  ask: string;
+  system: string;
+  prompt: string;
   schemaText: string;
+  needsSchema: boolean;
   alreadyPrimed: boolean;
   schemaChanged: boolean;
 }): string {
-  const { mode, skillName, system, ask, schemaText, alreadyPrimed, schemaChanged } = args;
+  const { skillSource, skillName, system, prompt, schemaText, needsSchema, alreadyPrimed, schemaChanged } = args;
   const parts: string[] = [];
-  if (mode === "account") {
-    // The uploaded skill carries the spec; we only trigger it + supply schema.
-    if (schemaChanged) parts.push(schemaText);
-    parts.push(`Use the ${skillName} skill to produce a changeset. Reply with the changeset JSON only, no prose.\n\n${ask}`);
-  } else {
-    // Primer: send the full spec on the first turn (or if the conversation was reset).
-    if (!alreadyPrimed) parts.push(system);
-    if (schemaChanged) parts.push(schemaText);
-    parts.push(`${ask}\n\nReply with the changeset JSON only, no prose, no code fences.`);
-  }
+  if (skillSource === "primer" && !alreadyPrimed) parts.push(system);
+  if (needsSchema && schemaChanged) parts.push(schemaText);
+  const lead = skillSource === "account" ? `/${skillName} ` : "";
+  parts.push(lead + prompt);
   return parts.join("\n\n");
 }

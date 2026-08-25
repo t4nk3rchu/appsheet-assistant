@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { extractChangesetJson, hashSchema, decideTurn, buildClaudeMessage } from "../src/lib/claude-msg";
+import { extractChangesetJson, hashSchema, decideTurn, buildSessionMessage } from "../src/lib/claude-msg";
 
 describe("extractChangesetJson", () => {
   it("returns clean JSON unchanged", () => {
@@ -53,32 +53,36 @@ describe("decideTurn", () => {
   });
 });
 
-describe("buildClaudeMessage", () => {
-  const base = { skillName: "appsheet-architect", system: "SPEC+RULES", ask: "add a bot", schemaText: "SCHEMA" };
-  it("primer, first turn: includes the full spec + schema + ask", () => {
-    const m = buildClaudeMessage({ ...base, mode: "primer", alreadyPrimed: false, schemaChanged: true });
+describe("buildSessionMessage", () => {
+  const base = { skillName: "appsheet-architect", system: "SPEC+RULES", prompt: "add a bot", schemaText: "SCHEMA", needsSchema: true };
+  it("primer, first turn: injects the full spec + schema + prompt", () => {
+    const m = buildSessionMessage({ ...base, skillSource: "primer", alreadyPrimed: false, schemaChanged: true });
     expect(m).toContain("SPEC+RULES");
     expect(m).toContain("SCHEMA");
     expect(m).toContain("add a bot");
+    expect(m).not.toContain("/appsheet-architect"); // primer never slashes
   });
-  it("primer, later turn, unchanged schema: no spec, no schema, just the ask", () => {
-    const m = buildClaudeMessage({ ...base, mode: "primer", alreadyPrimed: true, schemaChanged: false });
+  it("primer, later turn, unchanged schema: no spec, no schema, just the prompt", () => {
+    const m = buildSessionMessage({ ...base, skillSource: "primer", alreadyPrimed: true, schemaChanged: false });
     expect(m).not.toContain("SPEC+RULES");
     expect(m).not.toContain("SCHEMA");
-    expect(m).toContain("add a bot");
+    expect(m).toBe("add a bot");
   });
-  it("account mode: triggers the skill by name, no full spec", () => {
-    const m = buildClaudeMessage({ ...base, mode: "account", alreadyPrimed: false, schemaChanged: true });
-    expect(m).toContain("appsheet-architect");
+  it("account mode: slash-commands the skill, never injects the spec", () => {
+    const m = buildSessionMessage({ ...base, skillSource: "account", alreadyPrimed: false, schemaChanged: true });
+    expect(m).toContain("/appsheet-architect add a bot");
     expect(m).not.toContain("SPEC+RULES");
     expect(m).toContain("SCHEMA");
-    expect(m).toContain("add a bot");
   });
-  it("account mode, unchanged schema: no spec, no schema, just the skill trigger + ask", () => {
-    const m = buildClaudeMessage({ ...base, mode: "account", alreadyPrimed: true, schemaChanged: false });
+  it("account mode, unchanged schema: just the slash trigger + prompt", () => {
+    const m = buildSessionMessage({ ...base, skillSource: "account", alreadyPrimed: true, schemaChanged: false });
     expect(m).not.toContain("SPEC+RULES");
     expect(m).not.toContain("SCHEMA");
-    expect(m).toContain("appsheet-architect");
-    expect(m).toContain("add a bot");
+    expect(m).toBe("/appsheet-architect add a bot");
+  });
+  it("needsSchema false: never includes schema even when changed (e.g. Ask AI)", () => {
+    const m = buildSessionMessage({ ...base, skillSource: "account", needsSchema: false, alreadyPrimed: true, schemaChanged: true });
+    expect(m).not.toContain("SCHEMA");
+    expect(m).toBe("/appsheet-architect add a bot");
   });
 });

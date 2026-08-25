@@ -4,17 +4,15 @@
 import { useState, useRef, useEffect } from "react";
 import type { Dict } from "./i18n";
 import { useCompletion, ResultCard, ContextFields, NeedKey } from "./kit";
-import { complete } from "../lib/ai";
+import { runGen, primeSchema } from "../lib/claude-gen";
 import { getSchema, getTables, applyChangeset, applyTypes, editorReady, type Table } from "../lib/appsheet";
 import { validateSchema, type Issue } from "../lib/schema-check";
 import { validateChangeset, summarize, type ValidationResult, type FillResult } from "../lib/changeset";
 import {
   changesetPrompt, formulaPrompt, explainPrompt, fixPrompt, typesPrompt, askPrompt,
-  buildSchemaContext,
   type Ctx, type Lang, type ChatTurn,
 } from "../lib/prompts";
 import type { Skill } from "../lib/skills";
-import { askClaude } from "../lib/claude-client";
 import { getSettings } from "../lib/storage";
 
 interface TabProps {
@@ -42,7 +40,6 @@ export function BuildApp({ t, lang, hasKey, tables, instructions, skills, provid
   const [applying, setApplying] = useState(false);
   const [results, setResults] = useState<FillResult[] | null>(null);
   const [checking, setChecking] = useState(false);
-  const [askingClaude, setAskingClaude] = useState(false);
   const [issues, setIssues] = useState<Issue[] | null>(null);
   const [rawJson, setRawJson] = useState(""); // the editable changeset JSON (AI fills, user edits)
   const [tbls, setTbls] = useState<Table[]>([]); // tables used for validation (fetched at generate)
@@ -76,7 +73,10 @@ export function BuildApp({ t, lang, hasKey, tables, instructions, skills, provid
       setTbls(use);
       if (!use.length) { setErr(t.build_editorNotReady); return; }
       const { system, prompt } = changesetPrompt(ask, use, lang, instructions, skills);
-      let raw = (await complete(system, prompt)).trim().replace(/^```(?:json)?\s*/i, "").replace(/```$/, "").trim();
+      // runGen routes by provider/mode; needsSchema so Claude session mode primes
+      // the schema (once). The reply is raw text — extract the JSON changeset.
+      let raw = (await runGen(system, prompt, { needsSchema: true, tables: use })).trim()
+        .replace(/^```(?:json)?\s*/i, "").replace(/```$/, "").trim();
       const a = raw.indexOf("{"), b = raw.lastIndexOf("}");
       if (a >= 0 && b > a) raw = raw.slice(a, b + 1);
       // Pretty-print so the textarea is readable, then validate what we filled.
@@ -88,31 +88,6 @@ export function BuildApp({ t, lang, hasKey, tables, instructions, skills, provid
       setErr(String(e?.message ?? e));
     } finally {
       setBusy(false);
-    }
-  }
-
-  async function askViaClaude() {
-    reset();
-    setAskingClaude(true);
-    try {
-      const live = await getTables().catch(() => [] as Table[]);
-      const use = live.length ? live : tables;
-      setTbls(use);
-      if (!use.length) { setErr(t.build_editorNotReady); return; }
-      const { system, prompt } = changesetPrompt(ask, use, lang, instructions, skills);
-      const schemaText = buildSchemaContext(use);
-      const s = await getSettings();
-      let raw = (await askClaude(system, prompt, schemaText, use, s.claudeSkillSource, s.claudeSkillName)).trim();
-      const a = raw.indexOf("{"), b = raw.lastIndexOf("}");
-      if (a >= 0 && b > a) raw = raw.slice(a, b + 1);
-      let pretty = raw;
-      try { pretty = JSON.stringify(JSON.parse(raw), null, 2); } catch { /* leave raw */ }
-      setRawJson(pretty);
-      validateText(pretty, use);
-    } catch (e: any) {
-      setErr(String(e?.message ?? e));
-    } finally {
-      setAskingClaude(false);
     }
   }
 
@@ -137,6 +112,13 @@ export function BuildApp({ t, lang, hasKey, tables, instructions, skills, provid
     setErr("");
     try {
       setIssues(validateSchema(await getSchema()));
+      // In Claude session mode, "Check schema" also primes the claude.ai
+      // conversation with the app schema so later asks don't resend it.
+      const s = await getSettings();
+      if (s.provider === "claude" && s.claudeAuthMode === "session") {
+        const live = await getTables().catch(() => [] as Table[]);
+        if (live.length) { setTbls(live); await primeSchema(live); }
+      }
     } catch (e: any) {
       setErr(String(e?.message ?? e));
     } finally {
@@ -155,21 +137,14 @@ export function BuildApp({ t, lang, hasKey, tables, instructions, skills, provid
         {chips.map((ch) => <button key={ch} className="chip" onClick={() => setAsk(ch)}>{ch}</button>)}
       </div>
       <div className="row">
-        {provider === "claude" ? (
-          <button className="btn btn-primary" disabled={askingClaude || !ask.trim()} onClick={askViaClaude}>
-            {askingClaude ? t.build_askingClaude : t.build_askClaude}
-          </button>
-        ) : (
-          <button className="btn btn-primary" disabled={busy || !ask.trim() || !hasKey} onClick={generate}>
-            {busy ? t.generating : t.generate}
-          </button>
-        )}
+        <button className="btn btn-primary" disabled={busy || !ask.trim() || !hasKey} onClick={generate}>
+          {busy ? t.generating : (provider === "claude" ? t.build_askClaude : t.generate)}
+        </button>
         <button className="btn" disabled={checking} onClick={check}>
           {checking ? t.build_checking : t.build_check}
         </button>
       </div>
       <p className="hint">{provider === "claude" ? t.build_claudeHint : t.build_hint}</p>
-      <p className="hint">{t.build_claudeHint}</p>
       <NeedKey show={!hasKey} t={t} />
       {err && <p className="err">{err}</p>}
 
@@ -235,7 +210,7 @@ export function Formula({ t, lang, hasKey, tables }: TabProps) {
   const [cur, setCur] = useState("");
   const [ctx, setCtx] = useState<Ctx>(emptyCtx);
   const c = useCompletion();
-  const go = () => { const { system, prompt } = formulaPrompt(desc, cur, ctx, lang); c.run(() => complete(system, prompt)); };
+  const go = () => { const { system, prompt } = formulaPrompt(desc, cur, ctx, lang); c.run(() => runGen(system, prompt, { needsSchema: true, tables })); };
   return (
     <>
       <div className="field">
@@ -264,7 +239,7 @@ export function Explain({ t, lang, hasKey, tables }: TabProps) {
   const [expr, setExpr] = useState("");
   const [ctx, setCtx] = useState<Ctx>(emptyCtx);
   const c = useCompletion();
-  const go = () => { const { system, prompt } = explainPrompt(expr, ctx, lang); c.run(() => complete(system, prompt)); };
+  const go = () => { const { system, prompt } = explainPrompt(expr, ctx, lang); c.run(() => runGen(system, prompt, { needsSchema: true, tables })); };
   return (
     <>
       <div className="field">
@@ -291,7 +266,7 @@ export function Fix({ t, lang, hasKey, tables }: TabProps) {
   const [intended, setIntended] = useState("");
   const [ctx, setCtx] = useState<Ctx>(emptyCtx);
   const c = useCompletion();
-  const go = () => { const { system, prompt } = fixPrompt(expr, errMsg, intended, ctx, lang); c.run(() => complete(system, prompt)); };
+  const go = () => { const { system, prompt } = fixPrompt(expr, errMsg, intended, ctx, lang); c.run(() => runGen(system, prompt, { needsSchema: true, tables })); };
   return (
     <>
       <div className="field">
@@ -326,7 +301,7 @@ export function SetType({ t, lang, hasKey, tables }: TabProps) {
   const [applying, setApplying] = useState(false);
   const [applyMsg, setApplyMsg] = useState("");
   const c = useCompletion();
-  const go = () => { const { system, prompt } = typesPrompt(table, cols, lang); c.run(() => complete(system, prompt)); };
+  const go = () => { const { system, prompt } = typesPrompt(table, cols, lang); c.run(() => runGen(system, prompt, { needsSchema: false, tables })); };
   function fillFrom(name: string) {
     setTable(name);
     setApplyMsg("");
@@ -394,8 +369,9 @@ export function AskAI({ t, lang, hasKey }: TabProps) {
   const [msgs, setMsgs] = useState<ChatTurn[]>([]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [streaming, setStreaming] = useState(""); // live partial reply (session mode)
   const endRef = useRef<HTMLDivElement>(null);
-  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [msgs, busy]);
+  useEffect(() => { endRef.current?.scrollIntoView({ block: "end" }); }, [msgs, busy, streaming]);
 
   async function send() {
     const text = input.trim();
@@ -404,14 +380,16 @@ export function AskAI({ t, lang, hasKey }: TabProps) {
     setMsgs(history);
     setInput("");
     setBusy(true);
+    setStreaming("");
     try {
       const { system, prompt } = askPrompt(history, lang);
-      const answer = await complete(system, prompt);
+      const answer = await runGen(system, prompt, { needsSchema: false, onStream: setStreaming });
       setMsgs([...history, { role: "assistant", text: answer }]);
     } catch (e: any) {
       setMsgs([...history, { role: "assistant", text: String(e?.message ?? e) }]);
     } finally {
       setBusy(false);
+      setStreaming("");
     }
   }
 
@@ -420,7 +398,7 @@ export function AskAI({ t, lang, hasKey }: TabProps) {
       <div className="chat">
         {msgs.length === 0 && <div className="empty">{t.ask_empty}</div>}
         {msgs.map((m, i) => <div key={i} className={`msg ${m.role === "user" ? "user" : "ai"}`}>{m.text}</div>)}
-        {busy && <div className="msg ai">{t.generating}</div>}
+        {busy && <div className="msg ai">{streaming || t.generating}</div>}
         <div ref={endRef} />
       </div>
       <div className="chatbar">

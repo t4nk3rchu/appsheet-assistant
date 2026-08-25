@@ -56,6 +56,7 @@ function lastAssistantText(): string {
 async function drive(
   text: string,
   expectJson = true,
+  streamId?: string,
 ): Promise<{ json: string } | { text: string } | { error: string } | { needsLogin: true }> {
   if (needsLogin()) return { needsLogin: true };
   const el = composer();
@@ -71,13 +72,21 @@ async function drive(
     el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   }
 
+  // Push the accumulating reply to the sidebar as it streams (Ask AI tab).
+  const pushStream = () => {
+    if (!streamId) return;
+    const partial = lastAssistantText();
+    if (partial) browser.runtime.sendMessage({ __hoc: "claude-stream", streamId, text: partial }).catch(() => {});
+  };
+
   // Wait for streaming to start (up to 8s), then for it to finish (up to 180s).
   const t0 = Date.now();
   while (Date.now() - t0 < 8000 && !isStreaming()) await sleep(150);
   const t1 = Date.now();
-  while (Date.now() - t1 < 180000 && isStreaming()) await sleep(300);
+  while (Date.now() - t1 < 180000 && isStreaming()) { pushStream(); await sleep(300); }
   if (isStreaming()) return { error: "claude.ai response timed out." };
   await sleep(400); // let the final chunk settle
+  pushStream(); // final flush
 
   const reply = lastAssistantText();
   // Non-JSON tools (Formula/Explain/Fix/Ask/Types) want the raw reply text.
@@ -89,9 +98,9 @@ async function drive(
 
 if (globalThis.chrome?.runtime?.id) {
   browser.runtime.onMessage.addListener((message: unknown) => {
-    const msg = message as { __hoc?: string; text?: string; expectJson?: boolean } | undefined;
+    const msg = message as { __hoc?: string; text?: string; expectJson?: boolean; streamId?: string } | undefined;
     if (msg?.__hoc === "claude-status") return Promise.resolve({ signedIn: !needsLogin() && !!composer() });
     if (msg?.__hoc !== "claude-drive" || typeof msg.text !== "string") return undefined;
-    return drive(msg.text, msg.expectJson !== false);
+    return drive(msg.text, msg.expectJson !== false, msg.streamId);
   });
 }

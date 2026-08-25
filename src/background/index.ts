@@ -2,7 +2,7 @@ import browser from "webextension-polyfill";
 import { getSettings } from "../lib/storage";
 import { getProvider, anthropic } from "../lib/providers";
 import type { Table } from "../lib/tables";
-import { buildClaudeMessage, decideTurn, hashSchema, extractChangesetJson, type ClaudeTurnState } from "../lib/claude-msg";
+import { buildSessionMessage, decideTurn, hashSchema, type ClaudeTurnState } from "../lib/claude-msg";
 
 // One managed claude.ai conversation. Reset when the tab closes.
 let claudeTurn: ClaudeTurnState | null = null;
@@ -99,38 +99,58 @@ browser.tabs.onRemoved.addListener((tabId) => {
   });
 });
 
+// Session-mode generation for ALL tools. Builds a lean message (slash-command
+// the uploaded skill, or inject the spec once for "primer"), primes the schema
+// once for schema-dependent tools, and returns the raw reply text (the Build tab
+// extracts JSON from it). Optionally streams deltas to the sidebar via streamId.
 browser.runtime.onMessage.addListener((message: unknown) => {
   const msg = message as any;
-  if (!msg || msg.__hoc !== "claude-ask") return undefined;
-  return runClaudeAsk(msg);
+  if (!msg || msg.__hoc !== "claude-text") return undefined;
+  return runClaudeText(msg);
 });
 
-async function runClaudeAsk(msg: {
-  system: string; ask: string; schemaText: string; tables: Table[];
-  mode: "primer" | "account"; skillName: string;
-}): Promise<{ json: string } | { error: string } | { needsLogin: true }> {
+async function runClaudeText(msg: {
+  system: string; prompt: string; schemaText: string; tables: Table[];
+  needsSchema: boolean; skillSource: "primer" | "account"; skillName: string; streamId?: string;
+}): Promise<{ text: string } | { error: string } | { needsLogin: true }> {
   try {
-    const settings = await getSettings();
-    // API mode: the Anthropic API takes a system + user split directly — msg.system
-    // already carries the full spec + schema (from changesetPrompt). No claude.ai tab.
-    if (settings.claudeAuthMode === "api") {
-      const raw = await anthropic.complete({ system: msg.system, prompt: msg.ask, apiKey: settings.apiKeys.claude ?? "", baseUrl: settings.baseUrls.claude });
-      const json = extractChangesetJson(raw);
-      return json ? { json } : { error: "No changeset JSON found in the reply." };
-    }
     const tabId = await ensureClaudeTab();
-    const schemaHash = hashSchema(msg.tables);
+    // Non-schema tools keep the existing schema hash so they don't reset priming.
+    const schemaHash = msg.needsSchema ? hashSchema(msg.tables) : (claudeTurn?.schemaHash ?? "noschema");
     const { primed, schemaChanged, next } = decideTurn(claudeTurn, schemaHash, tabId);
-    const text = buildClaudeMessage({
-      mode: msg.mode, skillName: msg.skillName, system: msg.system,
-      ask: msg.ask, schemaText: msg.schemaText, alreadyPrimed: primed, schemaChanged,
+    const text = buildSessionMessage({
+      skillSource: msg.skillSource, skillName: msg.skillName, system: msg.system,
+      prompt: msg.prompt, schemaText: msg.schemaText, needsSchema: msg.needsSchema,
+      alreadyPrimed: primed, schemaChanged,
     });
-    const res: any = await browser.tabs.sendMessage(tabId, { __hoc: "claude-drive", text });
+    const res: any = await browser.tabs.sendMessage(tabId, { __hoc: "claude-drive", text, expectJson: false, streamId: msg.streamId });
     if (res?.needsLogin) return { needsLogin: true };
     if (res?.error) return { error: res.error };
-    // Only advance the conversation state once a turn actually succeeded.
-    claudeTurn = next;
-    return { json: res.json };
+    claudeTurn = next; // advance only on success
+    return { text: res.text ?? "" };
+  } catch (e: any) {
+    return { error: String(e?.message ?? e) };
+  }
+}
+
+// "Check schema" in session mode: send the app schema to claude.ai once to prime
+// the conversation, so later asks don't resend it.
+browser.runtime.onMessage.addListener((message: unknown) => {
+  const msg = message as any;
+  if (!msg || msg.__hoc !== "claude-prime") return undefined;
+  return runClaudePrime(msg);
+});
+
+async function runClaudePrime(msg: { schemaText: string; tables: Table[] }): Promise<{ ok: true } | { error: string } | { needsLogin: true }> {
+  try {
+    const tabId = await ensureClaudeTab();
+    const text = `Here is the current AppSheet app schema — use it for the changesets and answers that follow:\n\n${msg.schemaText}`;
+    const res: any = await browser.tabs.sendMessage(tabId, { __hoc: "claude-drive", text, expectJson: false });
+    if (res?.needsLogin) return { needsLogin: true };
+    if (res?.error) return { error: res.error };
+    // Record that this schema is now primed so subsequent asks skip re-sending it.
+    claudeTurn = { primed: claudeTurn?.primed ?? false, schemaHash: hashSchema(msg.tables), tabId };
+    return { ok: true };
   } catch (e: any) {
     return { error: String(e?.message ?? e) };
   }
