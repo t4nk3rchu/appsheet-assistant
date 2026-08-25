@@ -2,16 +2,36 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const sendMessage = vi.fn().mockResolvedValue(undefined);
 const query = vi.fn().mockResolvedValue([{ id: 42 }]);
+const create = vi.fn();
 const toggle = vi.fn();
 let onActionClicked: () => void;
-let onMessage: (msg: any) => any;
+const onMessageListeners: Array<(msg: any) => any> = [];
+
+/**
+ * The real browser fans a message out to every registered onMessage
+ * listener. Mirror that here: dispatch to all listeners and return the
+ * first result that isn't undefined (undefined means "not handled").
+ */
+async function dispatchMessage(msg: any): Promise<any> {
+  for (const listener of onMessageListeners) {
+    const result = listener(msg);
+    if (result !== undefined) return result;
+  }
+  return undefined;
+}
 
 vi.mock("webextension-polyfill", () => ({
   default: {
     action: { onClicked: { addListener: (fn: any) => (onActionClicked = fn) } },
     sidebarAction: { toggle },
-    tabs: { query, sendMessage },
-    runtime: { onMessage: { addListener: (fn: any) => (onMessage = fn) } },
+    tabs: {
+      query,
+      sendMessage,
+      create,
+      onUpdated: { addListener: vi.fn(), removeListener: vi.fn() },
+      onRemoved: { addListener: vi.fn() },
+    },
+    runtime: { onMessage: { addListener: (fn: any) => onMessageListeners.push(fn) } },
   },
 }));
 
@@ -49,7 +69,7 @@ describe("background run-completion", () => {
   });
 
   it("resolves { text } from the provider, using apiKey/baseUrl from settings", async () => {
-    const res = await onMessage({ __hoc: "run-completion", system: "s", prompt: "p" });
+    const res = await dispatchMessage({ __hoc: "run-completion", system: "s", prompt: "p" });
     expect(getProvider).toHaveBeenCalledWith("deepseek");
     expect(complete).toHaveBeenCalledWith({
       system: "s",
@@ -62,7 +82,7 @@ describe("background run-completion", () => {
 
   it("resolves { error } when the provider rejects", async () => {
     complete.mockRejectedValue(new Error("boom"));
-    const res = await onMessage({ __hoc: "run-completion", system: "s", prompt: "p" });
+    const res = await dispatchMessage({ __hoc: "run-completion", system: "s", prompt: "p" });
     expect(res).toEqual({ error: "boom" });
   });
 });
