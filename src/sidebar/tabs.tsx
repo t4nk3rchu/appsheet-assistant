@@ -10,9 +10,12 @@ import { validateSchema, type Issue } from "../lib/schema-check";
 import { validateChangeset, summarize, type ValidationResult, type FillResult } from "../lib/changeset";
 import {
   changesetPrompt, formulaPrompt, explainPrompt, fixPrompt, typesPrompt, askPrompt,
+  buildSchemaContext,
   type Ctx, type Lang, type ChatTurn,
 } from "../lib/prompts";
 import type { Skill } from "../lib/skills";
+import { askClaude } from "../lib/claude-client";
+import { getSettings } from "../lib/storage";
 
 interface TabProps {
   t: Dict;
@@ -38,6 +41,7 @@ export function BuildApp({ t, lang, hasKey, tables, instructions, skills }: TabP
   const [applying, setApplying] = useState(false);
   const [results, setResults] = useState<FillResult[] | null>(null);
   const [checking, setChecking] = useState(false);
+  const [askingClaude, setAskingClaude] = useState(false);
   const [issues, setIssues] = useState<Issue[] | null>(null);
   const [rawJson, setRawJson] = useState(""); // the editable changeset JSON (AI fills, user edits)
   const [tbls, setTbls] = useState<Table[]>([]); // tables used for validation (fetched at generate)
@@ -86,6 +90,31 @@ export function BuildApp({ t, lang, hasKey, tables, instructions, skills }: TabP
     }
   }
 
+  async function askViaClaude() {
+    reset();
+    setAskingClaude(true);
+    try {
+      const live = await getTables().catch(() => [] as Table[]);
+      const use = live.length ? live : tables;
+      setTbls(use);
+      if (!use.length) { setErr(t.build_editorNotReady); return; }
+      const { system, prompt } = changesetPrompt(ask, use, lang, instructions, skills);
+      const schemaText = buildSchemaContext(use);
+      const s = await getSettings();
+      let raw = (await askClaude(system, prompt, schemaText, use, s.claudeSkillSource, s.claudeSkillName)).trim();
+      const a = raw.indexOf("{"), b = raw.lastIndexOf("}");
+      if (a >= 0 && b > a) raw = raw.slice(a, b + 1);
+      let pretty = raw;
+      try { pretty = JSON.stringify(JSON.parse(raw), null, 2); } catch { /* leave raw */ }
+      setRawJson(pretty);
+      validateText(pretty, use);
+    } catch (e: any) {
+      setErr(String(e?.message ?? e));
+    } finally {
+      setAskingClaude(false);
+    }
+  }
+
   async function apply() {
     const changes = validation?.normalized ?? [];
     if (!changes.length) return;
@@ -128,11 +157,15 @@ export function BuildApp({ t, lang, hasKey, tables, instructions, skills }: TabP
         <button className="btn btn-primary" disabled={busy || !ask.trim() || !hasKey} onClick={generate}>
           {busy ? t.generating : t.generate}
         </button>
+        <button className="btn" disabled={askingClaude || !ask.trim()} onClick={askViaClaude}>
+          {askingClaude ? t.build_askingClaude : t.build_askClaude}
+        </button>
         <button className="btn" disabled={checking} onClick={check}>
           {checking ? t.build_checking : t.build_check}
         </button>
       </div>
       <p className="hint">{t.build_hint}</p>
+      <p className="hint">{t.build_claudeHint}</p>
       <NeedKey show={!hasKey} t={t} />
       {err && <p className="err">{err}</p>}
 

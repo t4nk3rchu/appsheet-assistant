@@ -25,6 +25,18 @@ export function App() {
         <input value={s.baseUrls[s.provider] ?? ""}
           onChange={(e) => patch({ baseUrls: { ...s.baseUrls, [s.provider]: e.target.value } })} />
       </label>
+      <label>Claude skill source{" "}
+        <select value={s.claudeSkillSource} onChange={(e) => patch({ claudeSkillSource: e.target.value as any })}>
+          <option value="primer">Inject spec (no setup)</option>
+          <option value="account">Uploaded skill (by name)</option>
+        </select>
+      </label>
+      {s.claudeSkillSource === "account" && (
+        <label>Skill name{" "}
+          <input value={s.claudeSkillName}
+            onChange={(e) => patch({ claudeSkillName: e.target.value })} />
+        </label>
+      )}
       <label>
         <input type="checkbox" checked={s.darkMode}
           onChange={(e) => patch({ darkMode: e.target.checked })} /> Dark mode
