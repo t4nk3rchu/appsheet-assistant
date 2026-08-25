@@ -34,6 +34,9 @@ browser.runtime.onMessage.addListener((message: unknown) => {
 async function runCompletion(system: string, prompt: string): Promise<{ text: string } | { error: string }> {
   try {
     const settings = await getSettings();
+    // "claude" is a session provider (claude.ai), not an API provider — route the
+    // plain-text completion through the managed claude.ai tab instead of getProvider.
+    if (settings.provider === "claude") return runClaudeComplete(system, prompt);
     const provider = getProvider(settings.provider);
     const apiKey = settings.apiKeys[settings.provider] ?? "";
     const baseUrl = settings.baseUrls[settings.provider];
@@ -42,6 +45,18 @@ async function runCompletion(system: string, prompt: string): Promise<{ text: st
   } catch (e: any) {
     return { error: String(e?.message ?? e) };
   }
+}
+
+/** Plain-text completion via claude.ai (for the non-Build tools). Sends
+ *  system+prompt as one chat message and returns the raw reply (no JSON
+ *  extraction, no schema/skill priming — those tools carry their own prompts). */
+async function runClaudeComplete(system: string, prompt: string): Promise<{ text: string } | { error: string }> {
+  const tabId = await ensureClaudeTab();
+  const text = `${system}\n\n${prompt}`;
+  const res: any = await browser.tabs.sendMessage(tabId, { __hoc: "claude-drive", text, expectJson: false });
+  if (res?.needsLogin) return { error: "Log into claude.ai, then try again." };
+  if (res?.error) return { error: res.error };
+  return { text: res.text ?? "" };
 }
 
 /** Find an existing claude.ai tab or open one; return its tabId. */

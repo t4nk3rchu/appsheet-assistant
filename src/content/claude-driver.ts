@@ -53,7 +53,10 @@ function lastAssistantText(): string {
   return last ? (last.innerText || last.textContent || "") : "";
 }
 
-async function drive(text: string): Promise<{ json: string } | { error: string } | { needsLogin: true }> {
+async function drive(
+  text: string,
+  expectJson = true,
+): Promise<{ json: string } | { text: string } | { error: string } | { needsLogin: true }> {
   if (needsLogin()) return { needsLogin: true };
   const el = composer();
   if (!el) return { error: "claude.ai composer not found (open a chat)." };
@@ -77,6 +80,8 @@ async function drive(text: string): Promise<{ json: string } | { error: string }
   await sleep(400); // let the final chunk settle
 
   const reply = lastAssistantText();
+  // Non-JSON tools (Formula/Explain/Fix/Ask/Types) want the raw reply text.
+  if (!expectJson) return { text: reply };
   const json = extractChangesetJson(reply);
   if (!json) return { error: "No changeset JSON found in the reply." };
   return { json };
@@ -84,8 +89,8 @@ async function drive(text: string): Promise<{ json: string } | { error: string }
 
 if (globalThis.chrome?.runtime?.id) {
   browser.runtime.onMessage.addListener((message: unknown) => {
-    const msg = message as { __hoc?: string; text?: string } | undefined;
+    const msg = message as { __hoc?: string; text?: string; expectJson?: boolean } | undefined;
     if (msg?.__hoc !== "claude-drive" || typeof msg.text !== "string") return undefined;
-    return drive(msg.text);
+    return drive(msg.text, msg.expectJson !== false);
   });
 }

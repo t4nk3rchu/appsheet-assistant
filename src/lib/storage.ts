@@ -3,7 +3,7 @@ import type { Backup } from "./backup";
 import type { Skill } from "./skills";
 
 export interface Settings {
-  provider: "gemini" | "deepseek";
+  provider: "gemini" | "deepseek" | "claude";
   apiKeys: Record<string, string>;
   baseUrls: Record<string, string>;
   darkMode: boolean;

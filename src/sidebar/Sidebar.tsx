@@ -41,18 +41,26 @@ function SettingsPanel({ s, patch, t, skills, onAddSkills, onRemoveSkill }: {
         <label>{t.set_provider}</label>
         <select value={s.provider} onChange={(e) => patch({ provider: e.target.value as any })}>
           {Object.values(PROVIDERS).map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+          <option value="claude">Claude (claude.ai)</option>
         </select>
       </div>
-      <div className="field">
-        <label>{t.set_apiKey}</label>
-        <input type="password" value={s.apiKeys[s.provider] ?? ""}
-          onChange={(e) => patch({ apiKeys: { ...s.apiKeys, [s.provider]: e.target.value } })} />
-      </div>
-      <div className="field">
-        <label>{t.set_baseUrl}</label>
-        <input type="text" value={s.baseUrls[s.provider] ?? ""}
-          onChange={(e) => patch({ baseUrls: { ...s.baseUrls, [s.provider]: e.target.value } })} />
-      </div>
+      {s.provider === "claude" ? (
+        // claude.ai uses your logged-in session — no API key. Just sign in.
+        <p className="hint">{t.set_claudeSignin}</p>
+      ) : (
+        <>
+          <div className="field">
+            <label>{t.set_apiKey}</label>
+            <input type="password" value={s.apiKeys[s.provider] ?? ""}
+              onChange={(e) => patch({ apiKeys: { ...s.apiKeys, [s.provider]: e.target.value } })} />
+          </div>
+          <div className="field">
+            <label>{t.set_baseUrl}</label>
+            <input type="text" value={s.baseUrls[s.provider] ?? ""}
+              onChange={(e) => patch({ baseUrls: { ...s.baseUrls, [s.provider]: e.target.value } })} />
+          </div>
+        </>
+      )}
       <label className="row" style={{ gap: 6 }}>
         <input type="checkbox" checked={s.darkMode} onChange={(e) => patch({ darkMode: e.target.checked })} />
         {t.set_dark}
@@ -129,7 +137,9 @@ export function Sidebar() {
 
   if (!s) return null;
   const t = dict(s.lang);
-  const hasKey = !!s.apiKeys[s.provider]?.trim();
+  // "claude" (claude.ai session) needs no API key — readiness is the live login,
+  // checked at request time; treat it as ready so the tools are enabled.
+  const hasKey = s.provider === "claude" || !!s.apiKeys[s.provider]?.trim();
   const Active = TABS.find((x) => x.id === active)!.C;
   const showChat = active === "ask" && !settingsOpen;
 
@@ -166,7 +176,7 @@ export function Sidebar() {
       ) : showChat ? (
         <AskAI t={t} lang={s.lang} hasKey={hasKey} tables={tables} />
       ) : (
-        <main className="body"><Active t={t} lang={s.lang} hasKey={hasKey} tables={tables} instructions={s.buildInstructions} skills={skills} /></main>
+        <main className="body"><Active t={t} lang={s.lang} hasKey={hasKey} tables={tables} instructions={s.buildInstructions} skills={skills} provider={s.provider} /></main>
       )}
 
       <footer className="footer">{t.footer}</footer>

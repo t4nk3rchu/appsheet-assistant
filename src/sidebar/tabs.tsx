@@ -24,6 +24,7 @@ interface TabProps {
   tables: Table[];
   instructions?: string; // user's persistent Build App conventions
   skills?: Skill[]; // user-uploaded skills the AI auto-triggers by description
+  provider?: string; // selected provider; "claude" routes generation via claude.ai
 }
 
 const emptyCtx: Ctx = { table: "", column: "", usedAs: "" };
@@ -32,7 +33,7 @@ const emptyCtx: Ctx = { table: "", column: "", usedAs: "" };
    AI returns a STRICT-JSON changeset → validate against the live tables →
    review N changes → "Dựng ngay" drives the editor (autofill engine) → the
    user clicks Save in the editor. Backup is taken before any write. */
-export function BuildApp({ t, lang, hasKey, tables, instructions, skills }: TabProps) {
+export function BuildApp({ t, lang, hasKey, tables, instructions, skills, provider }: TabProps) {
   const [ask, setAsk] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -154,17 +155,20 @@ export function BuildApp({ t, lang, hasKey, tables, instructions, skills }: TabP
         {chips.map((ch) => <button key={ch} className="chip" onClick={() => setAsk(ch)}>{ch}</button>)}
       </div>
       <div className="row">
-        <button className="btn btn-primary" disabled={busy || !ask.trim() || !hasKey} onClick={generate}>
-          {busy ? t.generating : t.generate}
-        </button>
-        <button className="btn" disabled={askingClaude || !ask.trim()} onClick={askViaClaude}>
-          {askingClaude ? t.build_askingClaude : t.build_askClaude}
-        </button>
+        {provider === "claude" ? (
+          <button className="btn btn-primary" disabled={askingClaude || !ask.trim()} onClick={askViaClaude}>
+            {askingClaude ? t.build_askingClaude : t.build_askClaude}
+          </button>
+        ) : (
+          <button className="btn btn-primary" disabled={busy || !ask.trim() || !hasKey} onClick={generate}>
+            {busy ? t.generating : t.generate}
+          </button>
+        )}
         <button className="btn" disabled={checking} onClick={check}>
           {checking ? t.build_checking : t.build_check}
         </button>
       </div>
-      <p className="hint">{t.build_hint}</p>
+      <p className="hint">{provider === "claude" ? t.build_claudeHint : t.build_hint}</p>
       <p className="hint">{t.build_claudeHint}</p>
       <NeedKey show={!hasKey} t={t} />
       {err && <p className="err">{err}</p>}

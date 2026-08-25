@@ -15,16 +15,25 @@ export function App() {
       <label>Provider{" "}
         <select value={s.provider} onChange={(e) => patch({ provider: e.target.value as any })}>
           {Object.values(PROVIDERS).map((p) => <option key={p.id} value={p.id}>{p.label}</option>)}
+          <option value="claude">Claude (claude.ai)</option>
         </select>
       </label>
-      <label>API key{" "}
-        <input type="password" value={s.apiKeys[s.provider] ?? ""}
-          onChange={(e) => patch({ apiKeys: { ...s.apiKeys, [s.provider]: e.target.value } })} />
-      </label>
-      <label>Base URL (optional - e.g. local Ollama){" "}
-        <input value={s.baseUrls[s.provider] ?? ""}
-          onChange={(e) => patch({ baseUrls: { ...s.baseUrls, [s.provider]: e.target.value } })} />
-      </label>
+      {s.provider === "claude" ? (
+        <p style={{ fontSize: 12, opacity: 0.7 }}>
+          Uses your logged-in claude.ai session — no API key. Sign in at claude.ai to use it.
+        </p>
+      ) : (
+        <>
+          <label>API key{" "}
+            <input type="password" value={s.apiKeys[s.provider] ?? ""}
+              onChange={(e) => patch({ apiKeys: { ...s.apiKeys, [s.provider]: e.target.value } })} />
+          </label>
+          <label>Base URL (optional - e.g. local Ollama){" "}
+            <input value={s.baseUrls[s.provider] ?? ""}
+              onChange={(e) => patch({ baseUrls: { ...s.baseUrls, [s.provider]: e.target.value } })} />
+          </label>
+        </>
+      )}
       <label>Claude skill source{" "}
         <select value={s.claudeSkillSource} onChange={(e) => patch({ claudeSkillSource: e.target.value as any })}>
           <option value="primer">Inject spec (no setup)</option>
