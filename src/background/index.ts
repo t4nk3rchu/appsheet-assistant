@@ -1,8 +1,8 @@
 import browser from "webextension-polyfill";
 import { getSettings } from "../lib/storage";
-import { getProvider } from "../lib/providers";
+import { getProvider, anthropic } from "../lib/providers";
 import type { Table } from "../lib/tables";
-import { buildClaudeMessage, decideTurn, hashSchema, type ClaudeTurnState } from "../lib/claude-msg";
+import { buildClaudeMessage, decideTurn, hashSchema, extractChangesetJson, type ClaudeTurnState } from "../lib/claude-msg";
 
 // One managed claude.ai conversation. Reset when the tab closes.
 let claudeTurn: ClaudeTurnState | null = null;
@@ -34,9 +34,15 @@ browser.runtime.onMessage.addListener((message: unknown) => {
 async function runCompletion(system: string, prompt: string): Promise<{ text: string } | { error: string }> {
   try {
     const settings = await getSettings();
-    // "claude" is a session provider (claude.ai), not an API provider — route the
-    // plain-text completion through the managed claude.ai tab instead of getProvider.
-    if (settings.provider === "claude") return runClaudeComplete(system, prompt);
+    // "claude" is not a normal API provider: in "session" mode it drives the
+    // claude.ai tab; in "api" mode it uses the Anthropic API with apiKeys.claude.
+    if (settings.provider === "claude") {
+      if (settings.claudeAuthMode === "api") {
+        const text = await anthropic.complete({ system, prompt, apiKey: settings.apiKeys.claude ?? "", baseUrl: settings.baseUrls.claude });
+        return { text };
+      }
+      return runClaudeComplete(system, prompt);
+    }
     const provider = getProvider(settings.provider);
     const apiKey = settings.apiKeys[settings.provider] ?? "";
     const baseUrl = settings.baseUrls[settings.provider];
@@ -104,6 +110,14 @@ async function runClaudeAsk(msg: {
   mode: "primer" | "account"; skillName: string;
 }): Promise<{ json: string } | { error: string } | { needsLogin: true }> {
   try {
+    const settings = await getSettings();
+    // API mode: the Anthropic API takes a system + user split directly — msg.system
+    // already carries the full spec + schema (from changesetPrompt). No claude.ai tab.
+    if (settings.claudeAuthMode === "api") {
+      const raw = await anthropic.complete({ system: msg.system, prompt: msg.ask, apiKey: settings.apiKeys.claude ?? "", baseUrl: settings.baseUrls.claude });
+      const json = extractChangesetJson(raw);
+      return json ? { json } : { error: "No changeset JSON found in the reply." };
+    }
     const tabId = await ensureClaudeTab();
     const schemaHash = hashSchema(msg.tables);
     const { primed, schemaChanged, next } = decideTurn(claudeTurn, schemaHash, tabId);
@@ -119,5 +133,35 @@ async function runClaudeAsk(msg: {
     return { json: res.json };
   } catch (e: any) {
     return { error: String(e?.message ?? e) };
+  }
+}
+
+// Sign-in + status for the claude.ai session mode (settings UI).
+browser.runtime.onMessage.addListener((message: unknown) => {
+  const msg = message as any;
+  if (msg?.__hoc === "claude-signin") return claudeSignin();
+  if (msg?.__hoc === "claude-status") return claudeStatus();
+  return undefined;
+});
+
+/** Open (or focus) a claude.ai tab so the user can log in. */
+async function claudeSignin(): Promise<{ ok: true }> {
+  const tabs = await browser.tabs.query({ url: "https://claude.ai/*" });
+  if (tabs[0]?.id != null) await browser.tabs.update(tabs[0].id, { active: true });
+  else await browser.tabs.create({ url: "https://claude.ai/new", active: true });
+  return { ok: true };
+}
+
+/** Report whether the user is signed into claude.ai (probes the driver in an
+ *  existing tab; does not open one). */
+async function claudeStatus(): Promise<{ signedIn: boolean; hasTab: boolean }> {
+  const tabs = await browser.tabs.query({ url: "https://claude.ai/*" });
+  const id = tabs[0]?.id;
+  if (id == null) return { signedIn: false, hasTab: false };
+  try {
+    const res: any = await browser.tabs.sendMessage(id, { __hoc: "claude-status" });
+    return { signedIn: !!res?.signedIn, hasTab: true };
+  } catch {
+    return { signedIn: false, hasTab: true }; // tab exists but driver not ready (needs reload)
   }
 }

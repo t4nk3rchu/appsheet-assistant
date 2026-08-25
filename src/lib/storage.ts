@@ -16,9 +16,12 @@ export interface Settings {
   // the user uploaded via claude.ai Customize, by name.
   claudeSkillSource: "primer" | "account";
   claudeSkillName: string;
+  // Claude auth mode: "session" drives the logged-in claude.ai tab (subscription,
+  // no key); "api" uses the Anthropic API with apiKeys.claude.
+  claudeAuthMode: "session" | "api";
 }
 
-const DEFAULTS: Settings = { provider: "gemini", apiKeys: {}, baseUrls: {}, darkMode: false, lang: "vi", buildInstructions: "", claudeSkillSource: "primer", claudeSkillName: "appsheet-architect" };
+const DEFAULTS: Settings = { provider: "gemini", apiKeys: {}, baseUrls: {}, darkMode: false, lang: "vi", buildInstructions: "", claudeSkillSource: "primer", claudeSkillName: "appsheet-architect", claudeAuthMode: "session" };
 const S_KEY = "settings";
 const B_KEY = "backups";
 const SK_KEY = "skills";

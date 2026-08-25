@@ -18,6 +18,7 @@ export function buildManifest(target: Target) {
       "https://www.appsheet.com/*",
       "https://generativelanguage.googleapis.com/*",
       "https://api.deepseek.com/*",
+      "https://api.anthropic.com/*",
       "https://claude.ai/*",
     ],
     content_scripts: [

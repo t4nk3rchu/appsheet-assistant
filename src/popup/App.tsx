@@ -1,6 +1,7 @@
 // src/popup/App.tsx — settings form, reused both as the options page and
 // inside the sidebar (see src/sidebar/Sidebar.tsx).
 import { useEffect, useState } from "react";
+import browser from "webextension-polyfill";
 import { getSettings, saveSettings, type Settings } from "../lib/storage";
 import { PROVIDERS } from "../lib/providers";
 
@@ -19,9 +20,27 @@ export function App() {
         </select>
       </label>
       {s.provider === "claude" ? (
-        <p style={{ fontSize: 12, opacity: 0.7 }}>
-          Uses your logged-in claude.ai session — no API key. Sign in at claude.ai to use it.
-        </p>
+        <>
+          <label>Claude auth{" "}
+            <select value={s.claudeAuthMode} onChange={(e) => patch({ claudeAuthMode: e.target.value as any })}>
+              <option value="session">Sign in (claude.ai session)</option>
+              <option value="api">API key (Anthropic)</option>
+            </select>
+          </label>
+          {s.claudeAuthMode === "session" ? (
+            <p style={{ fontSize: 12, opacity: 0.7 }}>
+              Uses your logged-in claude.ai session — no API key.{" "}
+              <button type="button" onClick={() => browser.runtime.sendMessage({ __hoc: "claude-signin" })}>
+                Sign in to claude.ai
+              </button>
+            </p>
+          ) : (
+            <label>Anthropic API key{" "}
+              <input type="password" value={s.apiKeys.claude ?? ""}
+                onChange={(e) => patch({ apiKeys: { ...s.apiKeys, claude: e.target.value } })} />
+            </label>
+          )}
+        </>
       ) : (
         <>
           <label>API key{" "}

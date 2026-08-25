@@ -2,6 +2,7 @@
 // settings), the tool tab strip, the active tool, and a footer. Owns the
 // settings/theme/language state and shares it down to the tabs.
 import { useCallback, useEffect, useState } from "react";
+import browser from "webextension-polyfill";
 import { getSettings, saveSettings, getSkills, saveSkills, type Settings } from "../lib/storage";
 import { parseSkill, parseSkillZip, type Skill } from "../lib/skills";
 import { getTables, type Table } from "../lib/appsheet";
@@ -30,6 +31,61 @@ function useSettings(): [Settings | null, (p: Partial<Settings>) => void] {
   return [s, patch];
 }
 
+// Claude auth: session (claude.ai sign-in + live status) or Anthropic API key.
+function ClaudeAuthFields({ s, patch, t }: { s: Settings; patch: (p: Partial<Settings>) => void; t: Dict }) {
+  const [status, setStatus] = useState<"unknown" | "in" | "out" | "checking">("unknown");
+  const check = useCallback(async () => {
+    setStatus("checking");
+    try {
+      const res: any = await browser.runtime.sendMessage({ __hoc: "claude-status" });
+      setStatus(res?.signedIn ? "in" : "out");
+    } catch {
+      setStatus("unknown");
+    }
+  }, []);
+  useEffect(() => { if (s.claudeAuthMode === "session") check(); }, [s.claudeAuthMode, check]);
+  const signin = async () => {
+    await browser.runtime.sendMessage({ __hoc: "claude-signin" });
+    setTimeout(check, 1500);
+  };
+  const statusText = status === "in" ? t.set_status_in : status === "out" ? t.set_status_out
+    : status === "checking" ? t.set_status_checking : t.set_status_unknown;
+  return (
+    <>
+      <div className="field">
+        <label>{t.set_claudeMode}</label>
+        <select value={s.claudeAuthMode} onChange={(e) => patch({ claudeAuthMode: e.target.value as any })}>
+          <option value="session">{t.set_claudeMode_session}</option>
+          <option value="api">{t.set_claudeMode_api}</option>
+        </select>
+      </div>
+      {s.claudeAuthMode === "session" ? (
+        <div className="field">
+          <div className="row" style={{ gap: 6, alignItems: "center" }}>
+            <button className="btn" onClick={signin}>{t.set_signin}</button>
+            <button className="btn" onClick={check} disabled={status === "checking"}>{t.set_status_check}</button>
+            <span className={`status status-${status}`}>{statusText}</span>
+          </div>
+          <span className="hint">{t.set_claudeSignin}</span>
+        </div>
+      ) : (
+        <>
+          <div className="field">
+            <label>{t.set_apiKey}</label>
+            <input type="password" value={s.apiKeys.claude ?? ""}
+              onChange={(e) => patch({ apiKeys: { ...s.apiKeys, claude: e.target.value } })} />
+          </div>
+          <div className="field">
+            <label>{t.set_baseUrl}</label>
+            <input type="text" value={s.baseUrls.claude ?? ""}
+              onChange={(e) => patch({ baseUrls: { ...s.baseUrls, claude: e.target.value } })} />
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
 function SettingsPanel({ s, patch, t, skills, onAddSkills, onRemoveSkill }: {
   s: Settings; patch: (p: Partial<Settings>) => void; t: Dict;
   skills: Skill[]; onAddSkills: (ns: Skill[]) => void; onRemoveSkill: (i: number) => void;
@@ -45,8 +101,7 @@ function SettingsPanel({ s, patch, t, skills, onAddSkills, onRemoveSkill }: {
         </select>
       </div>
       {s.provider === "claude" ? (
-        // claude.ai uses your logged-in session — no API key. Just sign in.
-        <p className="hint">{t.set_claudeSignin}</p>
+        <ClaudeAuthFields s={s} patch={patch} t={t} />
       ) : (
         <>
           <div className="field">
@@ -137,9 +192,12 @@ export function Sidebar() {
 
   if (!s) return null;
   const t = dict(s.lang);
-  // "claude" (claude.ai session) needs no API key — readiness is the live login,
-  // checked at request time; treat it as ready so the tools are enabled.
-  const hasKey = s.provider === "claude" || !!s.apiKeys[s.provider]?.trim();
+  // Readiness gate for the tools. Claude in "session" mode needs no key (login is
+  // checked at request time); in "api" mode it needs an Anthropic key like the
+  // other API providers.
+  const hasKey = s.provider === "claude"
+    ? (s.claudeAuthMode === "session" || !!s.apiKeys.claude?.trim())
+    : !!s.apiKeys[s.provider]?.trim();
   const Active = TABS.find((x) => x.id === active)!.C;
   const showChat = active === "ask" && !settingsOpen;
 

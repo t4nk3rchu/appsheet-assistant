@@ -90,6 +90,7 @@ async function drive(
 if (globalThis.chrome?.runtime?.id) {
   browser.runtime.onMessage.addListener((message: unknown) => {
     const msg = message as { __hoc?: string; text?: string; expectJson?: boolean } | undefined;
+    if (msg?.__hoc === "claude-status") return Promise.resolve({ signedIn: !needsLogin() && !!composer() });
     if (msg?.__hoc !== "claude-drive" || typeof msg.text !== "string") return undefined;
     return drive(msg.text, msg.expectJson !== false);
   });
