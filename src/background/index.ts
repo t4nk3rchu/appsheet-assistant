@@ -1,6 +1,11 @@
 import browser from "webextension-polyfill";
 import { getSettings } from "../lib/storage";
 import { getProvider } from "../lib/providers";
+import type { Table } from "../lib/tables";
+import { buildClaudeMessage, decideTurn, hashSchema, type ClaudeTurnState } from "../lib/claude-msg";
+
+// One managed claude.ai conversation. Reset when the tab closes.
+let claudeTurn: ClaudeTurnState | null = null;
 
 // Toolbar icon toggles the assistant.
 // Firefox: sidebar_action — toggle it on action click (a user gesture).
@@ -34,6 +39,63 @@ async function runCompletion(system: string, prompt: string): Promise<{ text: st
     const baseUrl = settings.baseUrls[settings.provider];
     const text = await provider.complete({ system, prompt, apiKey, baseUrl });
     return { text };
+  } catch (e: any) {
+    return { error: String(e?.message ?? e) };
+  }
+}
+
+/** Find an existing claude.ai tab or open one; return its tabId. */
+async function ensureClaudeTab(): Promise<number> {
+  const tabs = await browser.tabs.query({ url: "https://claude.ai/*" });
+  if (tabs[0]?.id != null) return tabs[0].id;
+  claudeTurn = null; // fresh tab = fresh conversation
+  const created = await browser.tabs.create({ url: "https://claude.ai/new", active: false });
+  if (created.id == null) throw new Error("Could not open a claude.ai tab.");
+  // Wait for the driver content script to be injectable (tab finishes loading).
+  await new Promise<void>((resolve) => {
+    const onUpdated = (id: number, info: browser.Tabs.OnUpdatedChangeInfoType) => {
+      if (id === created.id && info.status === "complete") {
+        browser.tabs.onUpdated.removeListener(onUpdated);
+        resolve();
+      }
+    };
+    browser.tabs.onUpdated.addListener(onUpdated);
+  });
+  return created.id;
+}
+
+browser.tabs.onRemoved.addListener((tabId) => {
+  // If the managed claude.ai tab closed, forget the conversation so the next
+  // ask re-primes.
+  browser.tabs.query({ url: "https://claude.ai/*" }).then((remaining) => {
+    if (!remaining.some((tb) => tb.id === tabId) && remaining.length === 0) claudeTurn = null;
+  });
+});
+
+browser.runtime.onMessage.addListener((message: unknown) => {
+  const msg = message as any;
+  if (!msg || msg.__hoc !== "claude-ask") return undefined;
+  return runClaudeAsk(msg);
+});
+
+async function runClaudeAsk(msg: {
+  system: string; ask: string; schemaText: string; tables: Table[];
+  mode: "primer" | "account"; skillName: string;
+}): Promise<{ json: string } | { error: string } | { needsLogin: true }> {
+  try {
+    const tabId = await ensureClaudeTab();
+    const schemaHash = hashSchema(msg.tables);
+    const { primed, schemaChanged, next } = decideTurn(claudeTurn, schemaHash);
+    const text = buildClaudeMessage({
+      mode: msg.mode, skillName: msg.skillName, system: msg.system,
+      ask: msg.ask, schemaText: msg.schemaText, alreadyPrimed: primed, schemaChanged,
+    });
+    const res: any = await browser.tabs.sendMessage(tabId, { __hoc: "claude-drive", text });
+    if (res?.needsLogin) return { needsLogin: true };
+    if (res?.error) return { error: res.error };
+    // Only advance the conversation state once a turn actually succeeded.
+    claudeTurn = next;
+    return { json: res.json };
   } catch (e: any) {
     return { error: String(e?.message ?? e) };
   }
