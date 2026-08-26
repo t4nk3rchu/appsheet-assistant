@@ -216,11 +216,18 @@ export function Sidebar() {
   useEffect(() => {
     refreshTables();
     const onVis = () => { if (document.visibilityState === "visible") refreshTables(); };
+    const onTabUpdated = (_: number, info: browser.Tabs.OnUpdatedChangeInfoType) => {
+      if (info.status === "complete") refreshTables();
+    };
     window.addEventListener("focus", refreshTables);
     document.addEventListener("visibilitychange", onVis);
+    browser.tabs.onActivated.addListener(refreshTables);
+    browser.tabs.onUpdated.addListener(onTabUpdated);
     return () => {
       window.removeEventListener("focus", refreshTables);
       document.removeEventListener("visibilitychange", onVis);
+      browser.tabs.onActivated.removeListener(refreshTables);
+      browser.tabs.onUpdated.removeListener(onTabUpdated);
     };
   }, [refreshTables]);
 
