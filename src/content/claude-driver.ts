@@ -46,11 +46,24 @@ function isStreaming(): boolean {
   return !!document.querySelector('button[aria-label="Stop response"], button[aria-label="Stop generating"]');
 }
 
-/** Text of the last assistant message block. */
+/** Text of the last assistant message block.
+ *  Tries multiple selectors so the driver survives claude.ai DOM changes. */
 function lastAssistantText(): string {
-  const msgs = Array.from(document.querySelectorAll<HTMLElement>('[data-testid="assistant-message"], div.font-claude-message'));
-  const last = msgs[msgs.length - 1];
-  return last ? (last.innerText || last.textContent || "") : "";
+  const candidates = [
+    '[data-testid="assistant-message"]',
+    '[data-testid="assistant-turn"]',
+    '.font-claude-message',
+    '[class*="assistant"] [class*="prose"]',
+    '[class*="ConversationItem"]:last-child',
+  ];
+  for (const sel of candidates) {
+    const els = Array.from(document.querySelectorAll<HTMLElement>(sel));
+    if (!els.length) continue;
+    const last = els[els.length - 1];
+    const text = (last.innerText || last.textContent || "").trim();
+    if (text) return text;
+  }
+  return "";
 }
 
 async function drive(

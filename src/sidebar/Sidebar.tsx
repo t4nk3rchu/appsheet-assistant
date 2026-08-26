@@ -179,6 +179,8 @@ export function Sidebar() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [tables, setTables] = useState<Table[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
+  // Lift Ask AI chat history here so it survives tab switches.
+  const [chatMsgs, setChatMsgs] = useState<import("../lib/prompts").ChatTurn[]>([]);
   useEffect(() => { getSkills().then(setSkills).catch(() => setSkills([])); }, []);
   const addSkills = (ns: Skill[]) => { setSkills((cur) => { const next = [...cur, ...ns]; saveSkills(next); return next; }); };
   const removeSkill = (i: number) => { setSkills((cur) => { const next = cur.filter((_, k) => k !== i); saveSkills(next); return next; }); };
@@ -247,7 +249,7 @@ export function Sidebar() {
       {settingsOpen ? (
         <main className="body"><SettingsPanel s={s} patch={patch} t={t} skills={skills} onAddSkills={addSkills} onRemoveSkill={removeSkill} /></main>
       ) : showChat ? (
-        <AskAI t={t} lang={s.lang} hasKey={hasKey} tables={tables} />
+        <AskAI t={t} lang={s.lang} hasKey={hasKey} tables={tables} chatMsgs={chatMsgs} setChatMsgs={setChatMsgs} />
       ) : (
         <main className="body"><Active t={t} lang={s.lang} hasKey={hasKey} tables={tables} instructions={s.buildInstructions} skills={skills} provider={s.provider} /></main>
       )}

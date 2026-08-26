@@ -23,6 +23,9 @@ interface TabProps {
   instructions?: string; // user's persistent Build App conventions
   skills?: Skill[]; // user-uploaded skills the AI auto-triggers by description
   provider?: string; // selected provider; "claude" routes generation via claude.ai
+  // AskAI — lifted state so history survives tab switches
+  chatMsgs?: ChatTurn[];
+  setChatMsgs?: (msgs: ChatTurn[]) => void;
 }
 
 const emptyCtx: Ctx = { table: "", column: "", usedAs: "" };
@@ -365,8 +368,12 @@ export function SetType({ t, lang, hasKey, tables }: TabProps) {
 }
 
 /* ---------- Ask AI (chat) ---------- */
-export function AskAI({ t, lang, hasKey }: TabProps) {
-  const [msgs, setMsgs] = useState<ChatTurn[]>([]);
+export function AskAI({ t, lang, hasKey, chatMsgs, setChatMsgs }: TabProps) {
+  // Fall back to local state when the parent doesn't lift state (e.g. tests/About).
+  const [localMsgs, setLocalMsgs] = useState<ChatTurn[]>([]);
+  const msgs = chatMsgs ?? localMsgs;
+  const setMsgs = setChatMsgs ?? setLocalMsgs;
+
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const [streaming, setStreaming] = useState(""); // live partial reply (session mode)
@@ -381,10 +388,16 @@ export function AskAI({ t, lang, hasKey }: TabProps) {
     setInput("");
     setBusy(true);
     setStreaming("");
+    // Track the last streamed chunk: driver sends full accumulated text each tick,
+    // so the last value == the complete reply even if lastAssistantText() selector fails.
+    let lastStream = "";
     try {
       const { system, prompt } = askPrompt(history, lang);
-      const answer = await runGen(system, prompt, { needsSchema: false, onStream: setStreaming });
-      setMsgs([...history, { role: "assistant", text: answer }]);
+      const answer = await runGen(system, prompt, {
+        needsSchema: false,
+        onStream: (p) => { lastStream = p; setStreaming(p); },
+      });
+      setMsgs([...history, { role: "assistant", text: answer || lastStream }]);
     } catch (e: any) {
       setMsgs([...history, { role: "assistant", text: String(e?.message ?? e) }]);
     } finally {
