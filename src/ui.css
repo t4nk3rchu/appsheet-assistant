@@ -84,6 +84,21 @@ body {
   font: 600 11px/1 var(--font-ui); padding: 6px 9px; cursor: pointer;
 }
 .seg button.on { background: var(--accent); color: #fff; }
+.schema-btn {
+  flex: none; border: 1px solid var(--border-strong); border-radius: var(--radius-sm);
+  background: var(--bg-elev); color: var(--text-dim);
+  font: 600 11px/1 var(--font-ui); padding: 4px 9px; cursor: pointer;
+}
+.schema-btn:hover:not(:disabled) { background: var(--bg-sunk); color: var(--text); }
+.schema-btn:disabled { opacity: .5; cursor: default; }
+.schema-btn.schema-ok { border-color: var(--ok); color: var(--ok); }
+.schema-btn.schema-err { border-color: var(--danger); color: var(--danger); }
+.schema-btn.schema-checking { opacity: .6; }
+.app-strip {
+  padding: 3px 12px; font-size: 11px; color: var(--text-dim);
+  background: var(--bg-elev); border-bottom: 1px solid var(--border);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 
 /* ---- tab strip ---- */
 .tabs {

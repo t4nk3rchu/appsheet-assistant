@@ -4,16 +4,14 @@
 import { useState, useRef, useEffect } from "react";
 import type { Dict } from "./i18n";
 import { useCompletion, ResultCard, ContextFields, NeedKey } from "./kit";
-import { runGen, primeSchema } from "../lib/claude-gen";
-import { getSchema, getTables, applyChangeset, applyTypes, editorReady, type Table } from "../lib/appsheet";
-import { validateSchema, type Issue } from "../lib/schema-check";
+import { runGen } from "../lib/claude-gen";
+import { getTables, applyChangeset, applyTypes, editorReady, type Table } from "../lib/appsheet";
 import { validateChangeset, summarize, type ValidationResult, type FillResult } from "../lib/changeset";
 import {
   changesetPrompt, formulaPrompt, explainPrompt, fixPrompt, typesPrompt, askPrompt,
   type Ctx, type Lang, type ChatTurn,
 } from "../lib/prompts";
 import type { Skill } from "../lib/skills";
-import { getSettings } from "../lib/storage";
 
 interface TabProps {
   t: Dict;
@@ -42,8 +40,6 @@ export function BuildApp({ t, lang, hasKey, tables, instructions, skills, provid
   const [validation, setValidation] = useState<ValidationResult | null>(null);
   const [applying, setApplying] = useState(false);
   const [results, setResults] = useState<FillResult[] | null>(null);
-  const [checking, setChecking] = useState(false);
-  const [issues, setIssues] = useState<Issue[] | null>(null);
   const [rawJson, setRawJson] = useState(""); // the editable changeset JSON (AI fills, user edits)
   const [tbls, setTbls] = useState<Table[]>([]); // tables used for validation (fetched at generate)
   const chips = [t.build_chip1, t.build_chip2, t.build_chip3, t.build_chip4];
@@ -63,7 +59,7 @@ export function BuildApp({ t, lang, hasKey, tables, instructions, skills, provid
     setValidation(validateChangeset(useTbls, parsed?.changes));
   }
 
-  function reset() { setErr(""); setParseErr(""); setValidation(null); setResults(null); setIssues(null); }
+  function reset() { setErr(""); setParseErr(""); setValidation(null); setResults(null); }
 
   async function generate() {
     reset();
@@ -110,25 +106,6 @@ export function BuildApp({ t, lang, hasKey, tables, instructions, skills, provid
     }
   }
 
-  async function check() {
-    setChecking(true);
-    setErr("");
-    try {
-      setIssues(validateSchema(await getSchema()));
-      // In Claude session mode, "Check schema" also primes the claude.ai
-      // conversation with the app schema so later asks don't resend it.
-      const s = await getSettings();
-      if (s.provider === "claude" && s.claudeAuthMode === "session") {
-        const live = await getTables().catch(() => [] as Table[]);
-        if (live.length) { setTbls(live); await primeSchema(live); }
-      }
-    } catch (e: any) {
-      setErr(String(e?.message ?? e));
-    } finally {
-      setChecking(false);
-    }
-  }
-
   const n = validation?.normalized.length ?? 0;
 
   return (
@@ -143,9 +120,6 @@ export function BuildApp({ t, lang, hasKey, tables, instructions, skills, provid
         <button className="btn btn-primary" disabled={busy || !ask.trim() || !hasKey} onClick={generate}>
           {busy ? t.generating : (provider === "claude" ? t.build_askClaude : t.generate)}
         </button>
-        <button className="btn" disabled={checking} onClick={check}>
-          {checking ? t.build_checking : t.build_check}
-        </button>
       </div>
       <p className="hint">{provider === "claude" ? t.build_claudeHint : t.build_hint}</p>
       <NeedKey show={!hasKey} t={t} />
@@ -158,14 +132,6 @@ export function BuildApp({ t, lang, hasKey, tables, instructions, skills, provid
         <span className="hint">{t.build_json_hint}</span>
       </div>
       {parseErr && <p className="err">{parseErr}</p>}
-
-      {issues && (
-        <ul className="issues">
-          {issues.length === 0
-            ? <li className="issue ok">{t.build_noIssues}</li>
-            : issues.map((iss, i) => <li key={i} className={`issue ${iss.level}`}>{iss.message}</li>)}
-        </ul>
-      )}
 
       {validation && (
         <>

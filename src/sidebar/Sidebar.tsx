@@ -1,11 +1,12 @@
 // src/sidebar/Sidebar.tsx — sidebar shell: header (brand, language, theme,
 // settings), the tool tab strip, the active tool, and a footer. Owns the
 // settings/theme/language state and shares it down to the tabs.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import browser from "webextension-polyfill";
 import { getSettings, saveSettings, getSkills, saveSkills, type Settings } from "../lib/storage";
 import { parseSkill, parseSkillZip, type Skill } from "../lib/skills";
-import { getTables, type Table } from "../lib/appsheet";
+import { getTables, getSchema, type Table } from "../lib/appsheet";
+import { primeApp } from "../lib/claude-gen";
 import { PROVIDERS } from "../lib/providers";
 import { dict } from "./i18n";
 import type { Dict } from "./i18n";
@@ -179,8 +180,15 @@ export function Sidebar() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [tables, setTables] = useState<Table[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
-  // Lift Ask AI chat history here so it survives tab switches.
+  // Per-app Claude session state.
+  const [appId, setAppId] = useState<string | null>(null);
+  const [appName, setAppName] = useState<string | null>(null);
+  const [schemaState, setSchemaState] = useState<"idle" | "checking" | "ok" | "err">("idle");
+  const [schemaErr, setSchemaErr] = useState("");
+  const lastAppIdRef = useRef<string | null>(null);
+  // Lifted Ask AI chat history (survives tab switches).
   const [chatMsgs, setChatMsgs] = useState<import("../lib/prompts").ChatTurn[]>([]);
+
   useEffect(() => { getSkills().then(setSkills).catch(() => setSkills([])); }, []);
   const addSkills = (ns: Skill[]) => { setSkills((cur) => { const next = [...cur, ...ns]; saveSkills(next); return next; }); };
   const removeSkill = (i: number) => { setSkills((cur) => { const next = cur.filter((_, k) => k !== i); saveSkills(next); return next; }); };
@@ -189,13 +197,22 @@ export function Sidebar() {
     if (s) document.documentElement.dataset.theme = s.darkMode ? "dark" : "light";
   }, [s?.darkMode]);
 
-  // Read the live table/column list, and REFRESH it whenever the sidebar regains
-  // focus or becomes visible — the user may have added/renamed a table in the
-  // editor since it was last read. (Previously fetched once on mount, so new
-  // tables weren't seen until the sidebar was closed and reopened.)
+  // Read tables and detect app changes on focus/visibility.
   const refreshTables = useCallback(() => {
     getTables().then(setTables).catch(() => {});
-  }, []);
+    getSchema().then(({ appId: newId, appName: newName }) => {
+      if (!newId || newId === lastAppIdRef.current) return;
+      lastAppIdRef.current = newId;
+      setAppId(newId);
+      setAppName(newName);
+      if (s?.provider === "claude" && s?.claudeAuthMode === "session") {
+        browser.runtime.sendMessage({ __hoc: "claude-switch-app", appId: newId })
+          .then((res: any) => setSchemaState(res?.hasSession ? "ok" : "idle"))
+          .catch(() => setSchemaState("idle"));
+      }
+    }).catch(() => {});
+  }, [s?.provider, s?.claudeAuthMode]);
+
   useEffect(() => {
     refreshTables();
     const onVis = () => { if (document.visibilityState === "visible") refreshTables(); };
@@ -207,13 +224,37 @@ export function Sidebar() {
     };
   }, [refreshTables]);
 
+  // Link this app to Claude: find/create a dedicated conversation, send schema.
+  const checkSchema = useCallback(async () => {
+    setSchemaState("checking");
+    setSchemaErr("");
+    try {
+      const [live, schema] = await Promise.all([
+        getTables().catch(() => [] as Table[]),
+        getSchema().catch(() => ({ appId: null, appName: null, appTemplate: null })),
+      ]);
+      if (live.length) setTables(live);
+      if (schema.appId) {
+        lastAppIdRef.current = schema.appId;
+        setAppId(schema.appId);
+        setAppName(schema.appName);
+      }
+      if (s && s.provider === "claude" && s.claudeAuthMode === "session") {
+        if (!live.length || !schema.appId) throw new Error("Open the AppSheet editor first.");
+        await primeApp(schema.appId!, schema.appName ?? schema.appId!, live);
+      }
+      setSchemaState("ok");
+    } catch (e: any) {
+      setSchemaErr(String(e?.message ?? e));
+      setSchemaState("err");
+    }
+  }, [s]);
+
   if (!s) return null;
   const t = dict(s.lang);
-  // Readiness gate for the tools. Claude in "session" mode needs no key (login is
-  // checked at request time); in "api" mode it needs an Anthropic key like the
-  // other API providers.
+  const isClaudeSession = s.provider === "claude" && s.claudeAuthMode === "session";
   const hasKey = s.provider === "claude"
-    ? (s.claudeAuthMode === "session" || !!s.apiKeys.claude?.trim())
+    ? (isClaudeSession ? schemaState === "ok" : !!s.apiKeys.claude?.trim())
     : !!s.apiKeys[s.provider]?.trim();
   const Active = TABS.find((x) => x.id === active)!.C;
   const showChat = active === "ask" && !settingsOpen;
@@ -227,12 +268,28 @@ export function Sidebar() {
           <button className={s.lang === "vi" ? "on" : ""} onClick={() => patch({ lang: "vi" })}>VI</button>
           <button className={s.lang === "en" ? "on" : ""} onClick={() => patch({ lang: "en" })}>EN</button>
         </div>
+        {isClaudeSession && (
+          <button
+            className={`schema-btn schema-${schemaState}`}
+            title={schemaState === "err" ? schemaErr : t.hdr_schema_title}
+            disabled={schemaState === "checking"}
+            onClick={checkSchema}
+          >
+            {schemaState === "checking" ? "…" : t.hdr_schema}
+          </button>
+        )}
         <button className="iconbtn" title={t.theme} onClick={() => patch({ darkMode: !s.darkMode })}>
           {s.darkMode ? "☀" : "☾"}
         </button>
         <button className="iconbtn" title={t.settings} aria-pressed={settingsOpen}
           onClick={() => setSettingsOpen((o) => !o)}>⚙</button>
       </header>
+
+      {isClaudeSession && appName && (
+        <div className="app-strip" title={appId ?? ""}>
+          {schemaState === "ok" ? "✓ " : ""}{appName}
+        </div>
+      )}
 
       <nav className="tabs">
         {TABS.map((tab) => (

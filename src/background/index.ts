@@ -7,6 +7,10 @@ import { buildSessionMessage, decideTurn, hashSchema, type ClaudeTurnState } fro
 // One managed claude.ai conversation. Reset when the tab closes.
 let claudeTurn: ClaudeTurnState | null = null;
 
+// Per-app session state (in-memory; sessions don't survive browser restart).
+const appSessions: Record<string, { tabId?: number; chatUrl?: string }> = {};
+let activeAppId: string | null = null;
+
 // Toolbar icon toggles the assistant.
 // Firefox: sidebar_action — toggle it on action click (a user gesture).
 // Chrome: side_panel — tell Chrome to open the panel when the action is clicked.
@@ -65,18 +69,11 @@ async function runClaudeComplete(system: string, prompt: string): Promise<{ text
   return { text: res.text ?? "" };
 }
 
-/** Find an existing claude.ai tab or open one; return its tabId. */
-async function ensureClaudeTab(): Promise<number> {
-  const tabs = await browser.tabs.query({ url: "https://claude.ai/*" });
-  if (tabs[0]?.id != null) return tabs[0].id;
-  claudeTurn = null; // fresh tab = fresh conversation
-  const created = await browser.tabs.create({ url: "https://claude.ai/new", active: false });
-  if (created.id == null) throw new Error("Could not open a claude.ai tab.");
-  // Wait for the driver content script to be injectable (tab finishes loading),
-  // but don't hang forever if the tab never reaches "complete".
-  await new Promise<void>((resolve, reject) => {
+/** Wait up to 15s for a tab to finish loading. */
+function waitForTabLoad(tabId: number): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
     const onUpdated = (id: number, info: browser.Tabs.OnUpdatedChangeInfoType) => {
-      if (id === created.id && info.status === "complete") {
+      if (id === tabId && info.status === "complete") {
         browser.tabs.onUpdated.removeListener(onUpdated);
         clearTimeout(timer);
         resolve();
@@ -88,6 +85,53 @@ async function ensureClaudeTab(): Promise<number> {
     }, 15000);
     browser.tabs.onUpdated.addListener(onUpdated);
   });
+}
+
+/** Find or create a claude.ai tab for a specific app, navigating to its
+ *  stored conversation URL when one exists. */
+async function ensureClaudeTabForApp(appId: string): Promise<number> {
+  const session = appSessions[appId] ?? (appSessions[appId] = {});
+
+  // Re-use an existing tab if it's still open.
+  if (session.tabId != null) {
+    try {
+      await browser.tabs.get(session.tabId);
+      if (activeAppId !== appId) { claudeTurn = null; activeAppId = appId; }
+      return session.tabId;
+    } catch {
+      delete session.tabId; // tab was closed
+    }
+  }
+
+  // Find an open tab already at the stored conversation URL.
+  if (session.chatUrl) {
+    const existing = await browser.tabs.query({ url: `${session.chatUrl}*` });
+    if (existing[0]?.id != null) {
+      session.tabId = existing[0].id;
+      if (activeAppId !== appId) { claudeTurn = null; activeAppId = appId; }
+      return session.tabId;
+    }
+  }
+
+  // Open a new tab — either the stored conversation or a fresh /new.
+  const url = session.chatUrl ?? "https://claude.ai/new";
+  const created = await browser.tabs.create({ url, active: false });
+  if (created.id == null) throw new Error("Could not open a claude.ai tab.");
+  await waitForTabLoad(created.id);
+  session.tabId = created.id;
+  if (activeAppId !== appId) { claudeTurn = null; activeAppId = appId; }
+  return created.id;
+}
+
+/** Find any claude.ai tab (generic fallback when no app is active). */
+async function ensureClaudeTab(): Promise<number> {
+  if (activeAppId) return ensureClaudeTabForApp(activeAppId);
+  const tabs = await browser.tabs.query({ url: "https://claude.ai/*" });
+  if (tabs[0]?.id != null) return tabs[0].id;
+  claudeTurn = null;
+  const created = await browser.tabs.create({ url: "https://claude.ai/new", active: false });
+  if (created.id == null) throw new Error("Could not open a claude.ai tab.");
+  await waitForTabLoad(created.id);
   return created.id;
 }
 
@@ -102,10 +146,12 @@ browser.runtime.onMessage.addListener((message: unknown) => {
 });
 
 browser.tabs.onRemoved.addListener((tabId) => {
-  // If the managed claude.ai tab closed, forget the conversation so the next
-  // ask re-primes.
+  // Clear the tabId from any app session using this tab (keep chatUrl for reconnect).
+  for (const appId of Object.keys(appSessions)) {
+    if (appSessions[appId].tabId === tabId) delete appSessions[appId].tabId;
+  }
   browser.tabs.query({ url: "https://claude.ai/*" }).then((remaining) => {
-    if (!remaining.some((tb) => tb.id === tabId) && remaining.length === 0) claudeTurn = null;
+    if (remaining.length === 0) claudeTurn = null;
   });
 });
 
@@ -165,6 +211,49 @@ async function runClaudePrime(msg: { schemaText: string; tables: Table[] }): Pro
     return { error: String(e?.message ?? e) };
   }
 }
+
+// Prime a specific AppSheet app: navigate to its stored conversation (or create
+// a new one), send the schema with app context, and store the chatUrl so future
+// messages go to the same conversation.
+browser.runtime.onMessage.addListener((message: unknown) => {
+  const msg = message as any;
+  if (!msg || msg.__hoc !== "claude-prime-app") return undefined;
+  return runClaudePrimeApp(msg);
+});
+
+async function runClaudePrimeApp(msg: {
+  appId: string; appName: string; schemaText: string; tables: Table[];
+}): Promise<{ ok: true } | { error: string } | { needsLogin: true }> {
+  try {
+    const { appId, appName, schemaText } = msg;
+    if (activeAppId !== appId) { claudeTurn = null; activeAppId = appId; }
+    const tabId = await ensureClaudeTabForApp(appId);
+    const text = `AppSheet app: ${appName} (ID: ${appId})\n\nHere is the current app schema — use it for changesets and answers that follow:\n\n${schemaText}`;
+    const res: any = await browser.tabs.sendMessage(tabId, { __hoc: "claude-drive", text, expectJson: false });
+    if (res?.needsLogin) return { needsLogin: true };
+    if (res?.error) return { error: res.error };
+    // Capture the conversation URL after first-message redirect (/new → /chat/uuid).
+    const tab = await browser.tabs.get(tabId).catch(() => null);
+    if (tab?.url?.includes("/chat/")) {
+      appSessions[appId] = { ...(appSessions[appId] ?? {}), chatUrl: tab.url, tabId };
+    }
+    claudeTurn = { primed: true, schemaHash: hashSchema(msg.tables), tabId };
+    return { ok: true };
+  } catch (e: any) {
+    return { error: String(e?.message ?? e) };
+  }
+}
+
+// Switch the active app without re-priming (sidebar detected an app change).
+// Returns hasSession=true when a stored conversation exists for this app.
+browser.runtime.onMessage.addListener((message: unknown) => {
+  const msg = message as any;
+  if (!msg || msg.__hoc !== "claude-switch-app") return undefined;
+  const appId: string = msg.appId;
+  const hasSession = !!appSessions[appId]?.chatUrl;
+  if (activeAppId !== appId) { claudeTurn = null; activeAppId = appId; }
+  return Promise.resolve({ ok: true, hasSession });
+});
 
 // Sign-in + status for the claude.ai session mode (settings UI).
 browser.runtime.onMessage.addListener((message: unknown) => {

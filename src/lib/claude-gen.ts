@@ -60,3 +60,15 @@ export async function primeSchema(tables: Table[]): Promise<void> {
   if (res?.needsLogin) throw new Error("Log into claude.ai, then try again.");
   if (res?.error) throw new Error(res.error);
 }
+
+/** Prime the claude.ai conversation for a specific AppSheet app: navigates to
+ *  (or creates) the app's dedicated conversation and sends the schema with app
+ *  context so Claude knows which app it's working on. */
+export async function primeApp(appId: string, appName: string, tables: Table[]): Promise<void> {
+  const res: any = await browser.runtime.sendMessage({
+    __hoc: "claude-prime-app", appId, appName,
+    schemaText: buildSchemaContext(tables), tables,
+  });
+  if (res?.needsLogin) throw new Error("Log into claude.ai, then try again.");
+  if (res?.error) throw new Error(res.error);
+}

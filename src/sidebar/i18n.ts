@@ -120,6 +120,9 @@ const en: Dict = {
   set_skills_remove: "Remove skill",
   set_claudeHasSkill: "I have the AppSheet Architect skill installed on claude.ai",
   set_skillName: "Skill name",
+  hdr_schema: "App",
+  hdr_schema_title: "Link this app to Claude — send schema and create a dedicated conversation",
+  needSchema: "Press the App button in the header to link this AppSheet app to Claude first.",
 
   about_lead: "An open-source assistant for the AppSheet editor.",
   about_credit: "Reverse-engineered as a Firefox/Chrome port of “Assistant for AppSheet” by Hoadata.",
@@ -245,6 +248,9 @@ const vi: Dict = {
   set_skills_remove: "Xoá skill",
   set_claudeHasSkill: "Tôi đã cài skill AppSheet Architect trên claude.ai",
   set_skillName: "Tên skill",
+  hdr_schema: "App",
+  hdr_schema_title: "Kết nối app này với Claude — gửi schema và tạo cuộc trò chuyện riêng",
+  needSchema: "Bấm nút App trên header để kết nối app AppSheet này với Claude trước.",
 
   about_lead: "Trợ lý mã nguồn mở cho trình chỉnh sửa AppSheet.",
   about_credit: "Được dịch ngược thành bản port Firefox/Chrome của “Assistant for AppSheet” bởi Hoadata.",
