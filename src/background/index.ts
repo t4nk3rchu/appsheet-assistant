@@ -91,6 +91,16 @@ async function ensureClaudeTab(): Promise<number> {
   return created.id;
 }
 
+// Content-script → runtime.sendMessage goes to the background but may not reach
+// extension pages (sidebar) directly in MV3. Relay claude-stream deltas so the
+// sidebar's onMessage listener receives them.
+browser.runtime.onMessage.addListener((message: unknown) => {
+  const msg = message as any;
+  if (msg?.__hoc !== "claude-stream" || msg.__relayed) return undefined;
+  browser.runtime.sendMessage({ ...msg, __relayed: true }).catch(() => {});
+  return undefined;
+});
+
 browser.tabs.onRemoved.addListener((tabId) => {
   // If the managed claude.ai tab closed, forget the conversation so the next
   // ask re-primes.

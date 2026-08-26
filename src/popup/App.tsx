@@ -53,17 +53,21 @@ export function App() {
           </label>
         </>
       )}
-      <label>Claude skill source{" "}
-        <select value={s.claudeSkillSource} onChange={(e) => patch({ claudeSkillSource: e.target.value as any })}>
-          <option value="primer">Inject spec (no setup)</option>
-          <option value="account">Uploaded skill (by name)</option>
-        </select>
-      </label>
-      {s.claudeSkillSource === "account" && (
-        <label>Skill name{" "}
-          <input value={s.claudeSkillName}
-            onChange={(e) => patch({ claudeSkillName: e.target.value })} />
-        </label>
+      {s.claudeAuthMode === "session" && (
+        <>
+          <label>
+            <input type="checkbox"
+              checked={s.claudeSkillSource === "account"}
+              onChange={(e) => patch({ claudeSkillSource: e.target.checked ? "account" : "primer" })} />
+            {" "}I have the AppSheet Architect skill installed on claude.ai
+          </label>
+          {s.claudeSkillSource === "account" && (
+            <label>Skill name{" "}
+              <input value={s.claudeSkillName}
+                onChange={(e) => patch({ claudeSkillName: e.target.value })} />
+            </label>
+          )}
+        </>
       )}
       <label>
         <input type="checkbox" checked={s.darkMode}

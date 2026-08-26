@@ -118,6 +118,8 @@ const en: Dict = {
   set_skills_hint: "Upload .skill/.md files or a .zip package (SKILL.md + references). The AI reads each skill's description and applies the ones matching your request.",
   set_skills_nodesc: "(no description)",
   set_skills_remove: "Remove skill",
+  set_claudeHasSkill: "I have the AppSheet Architect skill installed on claude.ai",
+  set_skillName: "Skill name",
 
   about_lead: "An open-source assistant for the AppSheet editor.",
   about_credit: "Reverse-engineered as a Firefox/Chrome port of “Assistant for AppSheet” by Hoadata.",
@@ -241,6 +243,8 @@ const vi: Dict = {
   set_skills_hint: "Tải lên file .skill/.md hoặc gói .zip (SKILL.md + references). AI đọc description của từng skill và áp dụng cái khớp yêu cầu.",
   set_skills_nodesc: "(không có mô tả)",
   set_skills_remove: "Xoá skill",
+  set_claudeHasSkill: "Tôi đã cài skill AppSheet Architect trên claude.ai",
+  set_skillName: "Tên skill",
 
   about_lead: "Trợ lý mã nguồn mở cho trình chỉnh sửa AppSheet.",
   about_credit: "Được dịch ngược thành bản port Firefox/Chrome của “Assistant for AppSheet” bởi Hoadata.",

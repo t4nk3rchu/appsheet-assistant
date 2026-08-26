@@ -60,14 +60,29 @@ function ClaudeAuthFields({ s, patch, t }: { s: Settings; patch: (p: Partial<Set
         </select>
       </div>
       {s.claudeAuthMode === "session" ? (
-        <div className="field">
-          <div className="row" style={{ gap: 6, alignItems: "center" }}>
-            <button className="btn" onClick={signin}>{t.set_signin}</button>
-            <button className="btn" onClick={check} disabled={status === "checking"}>{t.set_status_check}</button>
-            <span className={`status status-${status}`}>{statusText}</span>
+        <>
+          <div className="field">
+            <div className="row" style={{ gap: 6, alignItems: "center" }}>
+              <button className="btn" onClick={signin}>{t.set_signin}</button>
+              <button className="btn" onClick={check} disabled={status === "checking"}>{t.set_status_check}</button>
+              <span className={`status status-${status}`}>{statusText}</span>
+            </div>
+            <span className="hint">{t.set_claudeSignin}</span>
           </div>
-          <span className="hint">{t.set_claudeSignin}</span>
-        </div>
+          <label className="row" style={{ gap: 6 }}>
+            <input type="checkbox"
+              checked={s.claudeSkillSource === "account"}
+              onChange={(e) => patch({ claudeSkillSource: e.target.checked ? "account" : "primer" })} />
+            {t.set_claudeHasSkill}
+          </label>
+          {s.claudeSkillSource === "account" && (
+            <div className="field" style={{ marginTop: 4 }}>
+              <label>{t.set_skillName}</label>
+              <input type="text" value={s.claudeSkillName}
+                onChange={(e) => patch({ claudeSkillName: e.target.value })} />
+            </div>
+          )}
+        </>
       ) : (
         <>
           <div className="field">
