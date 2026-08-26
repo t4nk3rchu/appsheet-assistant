@@ -20,6 +20,7 @@ export function buildManifest(target: Target) {
       "https://api.deepseek.com/*",
       "https://api.anthropic.com/*",
       "https://claude.ai/*",
+      "https://gemini.google.com/*",
     ],
     content_scripts: [
       {
@@ -36,6 +37,11 @@ export function buildManifest(target: Target) {
       {
         matches: ["https://claude.ai/*"],
         js: ["src/content/claude-driver.ts"],
+        run_at: "document_idle",
+      },
+      {
+        matches: ["https://gemini.google.com/*"],
+        js: ["src/content/gemini-driver.ts"],
         run_at: "document_idle",
       },
     ],

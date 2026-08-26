@@ -6,7 +6,7 @@ import browser from "webextension-polyfill";
 import { getSettings, saveSettings, getSkills, saveSkills, type Settings } from "../lib/storage";
 import { parseSkill, parseSkillZip, type Skill } from "../lib/skills";
 import { getTables, getSchema, type Table } from "../lib/appsheet";
-import { primeApp } from "../lib/claude-gen";
+import { primeApp, isSessionMode } from "../lib/claude-gen";
 import { PROVIDERS } from "../lib/providers";
 import { dict } from "./i18n";
 import type { Dict } from "./i18n";
@@ -38,7 +38,7 @@ function ClaudeAuthFields({ s, patch, t }: { s: Settings; patch: (p: Partial<Set
   const check = useCallback(async () => {
     setStatus("checking");
     try {
-      const res: any = await browser.runtime.sendMessage({ __hoc: "claude-status" });
+      const res: any = await browser.runtime.sendMessage({ __hoc: "session-status", provider: "claude" });
       setStatus(res?.signedIn ? "in" : "out");
     } catch {
       setStatus("unknown");
@@ -46,7 +46,7 @@ function ClaudeAuthFields({ s, patch, t }: { s: Settings; patch: (p: Partial<Set
   }, []);
   useEffect(() => { if (s.claudeAuthMode === "session") check(); }, [s.claudeAuthMode, check]);
   const signin = async () => {
-    await browser.runtime.sendMessage({ __hoc: "claude-signin" });
+    await browser.runtime.sendMessage({ __hoc: "session-signin", provider: "claude" });
     setTimeout(check, 1500);
   };
   const statusText = status === "in" ? t.set_status_in : status === "out" ? t.set_status_out
@@ -102,6 +102,69 @@ function ClaudeAuthFields({ s, patch, t }: { s: Settings; patch: (p: Partial<Set
   );
 }
 
+// Gemini auth: session (gemini.google.com Gem + live status) or Generative
+// Language API key.
+function GeminiAuthFields({ s, patch, t }: { s: Settings; patch: (p: Partial<Settings>) => void; t: Dict }) {
+  const [status, setStatus] = useState<"unknown" | "in" | "out" | "checking">("unknown");
+  const check = useCallback(async () => {
+    setStatus("checking");
+    try {
+      const res: any = await browser.runtime.sendMessage({ __hoc: "session-status", provider: "gemini" });
+      setStatus(res?.signedIn ? "in" : "out");
+    } catch {
+      setStatus("unknown");
+    }
+  }, []);
+  useEffect(() => { if (s.geminiAuthMode === "session") check(); }, [s.geminiAuthMode, check]);
+  const signin = async () => {
+    await browser.runtime.sendMessage({ __hoc: "session-signin", provider: "gemini" });
+    setTimeout(check, 1500);
+  };
+  const statusText = status === "in" ? t.set_status_in : status === "out" ? t.set_status_out
+    : status === "checking" ? t.set_status_checking : t.set_status_unknown;
+  return (
+    <>
+      <div className="field">
+        <label>{t.set_geminiMode}</label>
+        <select value={s.geminiAuthMode} onChange={(e) => patch({ geminiAuthMode: e.target.value as any })}>
+          <option value="session">{t.set_geminiMode_session}</option>
+          <option value="api">{t.set_geminiMode_api}</option>
+        </select>
+      </div>
+      {s.geminiAuthMode === "session" ? (
+        <>
+          <div className="field">
+            <label>{t.set_gemUrl}</label>
+            <input type="text" value={s.geminiGemUrl} placeholder="https://gemini.google.com/gem/…"
+              onChange={(e) => patch({ geminiGemUrl: e.target.value })} />
+            <span className="hint">{t.set_gemUrl_hint}</span>
+          </div>
+          <div className="field">
+            <div className="row" style={{ gap: 6, alignItems: "center" }}>
+              <button className="btn" onClick={signin}>{t.set_geminiSignin_btn}</button>
+              <button className="btn" onClick={check} disabled={status === "checking"}>{t.set_status_check}</button>
+              <span className={`status status-${status}`}>{statusText}</span>
+            </div>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="field">
+            <label>{t.set_apiKey}</label>
+            <input type="password" value={s.apiKeys.gemini ?? ""}
+              onChange={(e) => patch({ apiKeys: { ...s.apiKeys, gemini: e.target.value } })} />
+          </div>
+          <div className="field">
+            <label>{t.set_baseUrl}</label>
+            <input type="text" value={s.baseUrls.gemini ?? ""}
+              onChange={(e) => patch({ baseUrls: { ...s.baseUrls, gemini: e.target.value } })} />
+          </div>
+        </>
+      )}
+    </>
+  );
+}
+
 function SettingsPanel({ s, patch, t, skills, onAddSkills, onRemoveSkill }: {
   s: Settings; patch: (p: Partial<Settings>) => void; t: Dict;
   skills: Skill[]; onAddSkills: (ns: Skill[]) => void; onRemoveSkill: (i: number) => void;
@@ -118,6 +181,8 @@ function SettingsPanel({ s, patch, t, skills, onAddSkills, onRemoveSkill }: {
       </div>
       {s.provider === "claude" ? (
         <ClaudeAuthFields s={s} patch={patch} t={t} />
+      ) : s.provider === "gemini" ? (
+        <GeminiAuthFields s={s} patch={patch} t={t} />
       ) : (
         <>
           <div className="field">
@@ -205,13 +270,13 @@ export function Sidebar() {
       lastAppIdRef.current = newId;
       setAppId(newId);
       setAppName(newName);
-      if (s?.provider === "claude" && s?.claudeAuthMode === "session") {
-        browser.runtime.sendMessage({ __hoc: "claude-switch-app", appId: newId })
+      if (s && isSessionMode(s)) {
+        browser.runtime.sendMessage({ __hoc: "session-switch-app", provider: s.provider, appId: newId })
           .then((res: any) => setSchemaState(res?.hasSession ? "ok" : "idle"))
           .catch(() => setSchemaState("idle"));
       }
     }).catch(() => {});
-  }, [s?.provider, s?.claudeAuthMode]);
+  }, [s?.provider, s?.claudeAuthMode, s?.geminiAuthMode]);
 
   useEffect(() => {
     refreshTables();
@@ -246,14 +311,14 @@ export function Sidebar() {
         setAppId(schema.appId);
         setAppName(schema.appName);
       }
-      if (s && s.provider === "claude" && s.claudeAuthMode === "session") {
+      if (s && isSessionMode(s)) {
         if (!live.length || !schema.appId) throw new Error("Open the AppSheet editor first.");
         // Only prime if no existing session — avoids opening a new tab unnecessarily.
         const switchRes: any = await browser.runtime.sendMessage({
-          __hoc: "claude-switch-app", appId: schema.appId!,
+          __hoc: "session-switch-app", provider: s.provider, appId: schema.appId!,
         }).catch(() => null);
         if (!switchRes?.hasSession) {
-          await primeApp(schema.appId!, schema.appName ?? schema.appId!, live);
+          await primeApp(s.provider, schema.appId!, schema.appName ?? schema.appId!, live);
         }
       }
       setSchemaState("ok");
@@ -265,10 +330,8 @@ export function Sidebar() {
 
   if (!s) return null;
   const t = dict(s.lang);
-  const isClaudeSession = s.provider === "claude" && s.claudeAuthMode === "session";
-  const hasKey = s.provider === "claude"
-    ? (isClaudeSession ? schemaState === "ok" : !!s.apiKeys.claude?.trim())
-    : !!s.apiKeys[s.provider]?.trim();
+  const isSession = isSessionMode(s);
+  const hasKey = isSession ? schemaState === "ok" : !!s.apiKeys[s.provider]?.trim();
   const Active = TABS.find((x) => x.id === active)!.C;
   const showChat = active === "ask" && !settingsOpen;
 
@@ -281,7 +344,7 @@ export function Sidebar() {
           <button className={s.lang === "vi" ? "on" : ""} onClick={() => patch({ lang: "vi" })}>VI</button>
           <button className={s.lang === "en" ? "on" : ""} onClick={() => patch({ lang: "en" })}>EN</button>
         </div>
-        {isClaudeSession && (
+        {isSession && (
           <button
             className={`schema-btn schema-${schemaState}`}
             title={schemaState === "err" ? schemaErr : t.hdr_schema_title}
@@ -298,7 +361,7 @@ export function Sidebar() {
           onClick={() => setSettingsOpen((o) => !o)}>⚙</button>
       </header>
 
-      {isClaudeSession && appName && (
+      {isSession && appName && (
         <div className="app-strip" title={appId ?? ""}>
           {schemaState === "ok" ? "✓ " : ""}{appName}
         </div>

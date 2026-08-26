@@ -30,7 +30,7 @@ export function App() {
           {s.claudeAuthMode === "session" ? (
             <p style={{ fontSize: 12, opacity: 0.7 }}>
               Uses your logged-in claude.ai session — no API key.{" "}
-              <button type="button" onClick={() => browser.runtime.sendMessage({ __hoc: "claude-signin" })}>
+              <button type="button" onClick={() => browser.runtime.sendMessage({ __hoc: "session-signin", provider: "claude" })}>
                 Sign in to claude.ai
               </button>
             </p>

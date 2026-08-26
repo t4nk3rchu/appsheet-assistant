@@ -19,9 +19,16 @@ export interface Settings {
   // Claude auth mode: "session" drives the logged-in claude.ai tab (subscription,
   // no key); "api" uses the Anthropic API with apiKeys.claude.
   claudeAuthMode: "session" | "api";
+  // Gemini auth mode: "session" drives the logged-in gemini.google.com tab inside
+  // a Gem (geminiGemUrl); "api" uses the Generative Language API with apiKeys.gemini.
+  geminiAuthMode: "session" | "api";
+  // The Gem to drive in session mode (share link or /gem/<id> URL). The Gem holds
+  // the AppSheet instructions, so nothing is injected — each app gets its own
+  // conversation under this Gem.
+  geminiGemUrl: string;
 }
 
-const DEFAULTS: Settings = { provider: "gemini", apiKeys: {}, baseUrls: {}, darkMode: false, lang: "vi", buildInstructions: "", claudeSkillSource: "primer", claudeSkillName: "appsheet-architect", claudeAuthMode: "session" };
+const DEFAULTS: Settings = { provider: "gemini", apiKeys: {}, baseUrls: {}, darkMode: false, lang: "vi", buildInstructions: "", claudeSkillSource: "primer", claudeSkillName: "appsheet-architect", claudeAuthMode: "session", geminiAuthMode: "api", geminiGemUrl: "" };
 const S_KEY = "settings";
 const B_KEY = "backups";
 const SK_KEY = "skills";

@@ -63,7 +63,9 @@ export function buildSessionMessage(args: {
   const parts: string[] = [];
   if (skillSource === "primer" && !alreadyPrimed) parts.push(system);
   if (needsSchema && schemaChanged) parts.push(schemaText);
-  const lead = skillSource === "account" ? `/${skillName} ` : "";
+  // "account" with a skill name triggers it by slash; an empty name (Gemini Gem,
+  // which is auto-active on its URL) sends nothing extra — the Gem is the skill.
+  const lead = skillSource === "account" && skillName ? `/${skillName} ` : "";
   parts.push(lead + prompt);
   return parts.join("\n\n");
 }

@@ -1,15 +1,52 @@
 import browser from "webextension-polyfill";
-import { getSettings } from "../lib/storage";
+import { getSettings, type Settings } from "../lib/storage";
 import { getProvider, anthropic } from "../lib/providers";
 import type { Table } from "../lib/tables";
 import { buildSessionMessage, decideTurn, hashSchema, type ClaudeTurnState } from "../lib/claude-msg";
 
-// One managed claude.ai conversation. Reset when the tab closes.
-let claudeTurn: ClaudeTurnState | null = null;
+// One managed chat conversation (claude.ai or gemini.google.com). Reset on switch/close.
+let sessionTurn: ClaudeTurnState | null = null;
 
-// Per-app session state (in-memory; sessions don't survive browser restart).
+// Per-app session state (in-memory; not persisted across browser restart).
+// Keyed by `${provider}:${appId}` so Claude and Gemini sessions never collide.
 const appSessions: Record<string, { tabId?: number; chatUrl?: string }> = {};
-let activeAppId: string | null = null;
+let activeKey: string | null = null;
+
+// A session connector describes one chat site we drive in a tab. The DOM
+// selectors live in the per-site content script (claude-driver / gemini-driver);
+// this is only what the background needs to route tabs and messages.
+interface Connector {
+  provider: "claude" | "gemini";
+  hostGlob: string; // tabs.query URL match
+  driveMsg: string; // message tag the content-script driver listens for
+  statusMsg: string; // signed-in probe tag
+  newChatUrl: string; // where a fresh conversation starts
+  isConvoUrl: (u: string) => boolean; // has the URL become a saved conversation?
+}
+
+function connectorFor(provider: string, s: Settings): Connector {
+  if (provider === "gemini") {
+    return {
+      provider: "gemini",
+      hostGlob: "https://gemini.google.com/*",
+      driveMsg: "gemini-drive",
+      statusMsg: "gemini-status",
+      newChatUrl: s.geminiGemUrl?.trim() || "https://gemini.google.com/app",
+      // A Gem conversation is /gem/<id>/<convoId>; a plain chat is /app/<convoId>.
+      isConvoUrl: (u) => /\/gem\/[^/]+\/[^/?#]+/.test(u) || /\/app\/[^/?#]+/.test(u),
+    };
+  }
+  return {
+    provider: "claude",
+    hostGlob: "https://claude.ai/*",
+    driveMsg: "claude-drive",
+    statusMsg: "claude-status",
+    newChatUrl: "https://claude.ai/new",
+    isConvoUrl: (u) => u.includes("/chat/"),
+  };
+}
+
+const keyFor = (provider: string, appId: string) => `${provider}:${appId}`;
 
 // Toolbar icon toggles the assistant.
 // Firefox: sidebar_action — toggle it on action click (a user gesture).
@@ -45,7 +82,7 @@ async function runCompletion(system: string, prompt: string): Promise<{ text: st
         const text = await anthropic.complete({ system, prompt, apiKey: settings.apiKeys.claude ?? "", baseUrl: settings.baseUrls.claude });
         return { text };
       }
-      return runClaudeComplete(system, prompt);
+      return runSessionComplete(connectorFor("claude", settings), system, prompt);
     }
     const provider = getProvider(settings.provider);
     const apiKey = settings.apiKeys[settings.provider] ?? "";
@@ -57,14 +94,12 @@ async function runCompletion(system: string, prompt: string): Promise<{ text: st
   }
 }
 
-/** Plain-text completion via claude.ai (for the non-Build tools). Sends
- *  system+prompt as one chat message and returns the raw reply (no JSON
- *  extraction, no schema/skill priming — those tools carry their own prompts). */
-async function runClaudeComplete(system: string, prompt: string): Promise<{ text: string } | { error: string }> {
-  const tabId = await ensureClaudeTab();
+/** Plain-text completion via a driven tab (fallback path). */
+async function runSessionComplete(conn: Connector, system: string, prompt: string): Promise<{ text: string } | { error: string }> {
+  const tabId = await ensureSessionTab(conn);
   const text = `${system}\n\n${prompt}`;
-  const res: any = await browser.tabs.sendMessage(tabId, { __hoc: "claude-drive", text, expectJson: false });
-  if (res?.needsLogin) return { error: "Log into claude.ai, then try again." };
+  const res: any = await browser.tabs.sendMessage(tabId, { __hoc: conn.driveMsg, text, expectJson: false });
+  if (res?.needsLogin) return { error: `Log into ${conn.provider === "gemini" ? "gemini.google.com" : "claude.ai"}, then try again.` };
   if (res?.error) return { error: res.error };
   return { text: res.text ?? "" };
 }
@@ -81,23 +116,24 @@ function waitForTabLoad(tabId: number): Promise<void> {
     };
     const timer = setTimeout(() => {
       browser.tabs.onUpdated.removeListener(onUpdated);
-      reject(new Error("claude.ai tab did not finish loading"));
+      reject(new Error("chat tab did not finish loading"));
     }, 15000);
     browser.tabs.onUpdated.addListener(onUpdated);
   });
 }
 
-/** Find or create a claude.ai tab for a specific app, navigating to its
- *  stored conversation URL when one exists. Prefers reusing an open tab
- *  over creating a new one. */
-async function ensureClaudeTabForApp(appId: string): Promise<number> {
-  const session = appSessions[appId] ?? (appSessions[appId] = {});
+/** Find or create a tab for a specific app's conversation. Prefers reusing an
+ *  open tab (stored one → stored URL → any tab on the host) over a new one. */
+async function ensureSessionTabForApp(conn: Connector, appId: string): Promise<number> {
+  const key = keyFor(conn.provider, appId);
+  const session = appSessions[key] ?? (appSessions[key] = {});
+  const activate = () => { if (activeKey !== key) { sessionTurn = null; activeKey = key; } };
 
   // Re-use the stored tab if still open.
   if (session.tabId != null) {
     try {
       await browser.tabs.get(session.tabId);
-      if (activeAppId !== appId) { claudeTurn = null; activeAppId = appId; }
+      activate();
       return session.tabId;
     } catch {
       delete session.tabId;
@@ -109,157 +145,141 @@ async function ensureClaudeTabForApp(appId: string): Promise<number> {
     const byUrl = await browser.tabs.query({ url: `${session.chatUrl}*` });
     if (byUrl[0]?.id != null) {
       session.tabId = byUrl[0].id;
-      if (activeAppId !== appId) { claudeTurn = null; activeAppId = appId; }
+      activate();
       return session.tabId;
     }
   }
 
-  // Reuse any open claude.ai tab rather than opening a new one.
-  const anyClaudeTabs = await browser.tabs.query({ url: "https://claude.ai/*" });
-  if (anyClaudeTabs[0]?.id != null) {
-    session.tabId = anyClaudeTabs[0].id!;
-    // Navigate to the stored conversation if the tab is on a different URL.
-    if (session.chatUrl) {
-      const cur = anyClaudeTabs[0].url ?? "";
-      if (!cur.startsWith(session.chatUrl.split("?")[0])) {
-        await browser.tabs.update(session.tabId, { url: session.chatUrl });
-        await waitForTabLoad(session.tabId);
-      }
+  // Reuse any open tab on this host rather than opening a new one.
+  const anyTabs = await browser.tabs.query({ url: conn.hostGlob });
+  if (anyTabs[0]?.id != null) {
+    session.tabId = anyTabs[0].id!;
+    // Navigate it to the stored conversation (or the new-chat entry) if it's elsewhere.
+    const dest = session.chatUrl ?? conn.newChatUrl;
+    const cur = anyTabs[0].url ?? "";
+    if (!cur.startsWith(dest.split("?")[0])) {
+      await browser.tabs.update(session.tabId, { url: dest });
+      await waitForTabLoad(session.tabId);
     }
-    if (activeAppId !== appId) { claudeTurn = null; activeAppId = appId; }
+    activate();
     return session.tabId;
   }
 
-  // No claude.ai tab open at all — open a new one.
-  const url = session.chatUrl ?? "https://claude.ai/new";
+  // No tab on this host at all — open one.
+  const url = session.chatUrl ?? conn.newChatUrl;
   const created = await browser.tabs.create({ url, active: false });
-  if (created.id == null) throw new Error("Could not open a claude.ai tab.");
+  if (created.id == null) throw new Error(`Could not open a ${conn.provider} tab.`);
   await waitForTabLoad(created.id);
   session.tabId = created.id;
-  if (activeAppId !== appId) { claudeTurn = null; activeAppId = appId; }
+  activate();
   return created.id;
 }
 
-/** Find any claude.ai tab (generic fallback when no app is active). */
-async function ensureClaudeTab(): Promise<number> {
-  if (activeAppId) return ensureClaudeTabForApp(activeAppId);
-  const tabs = await browser.tabs.query({ url: "https://claude.ai/*" });
+/** Find any tab on the connector's host (generic fallback when no app is active). */
+async function ensureSessionTab(conn: Connector): Promise<number> {
+  if (activeKey?.startsWith(`${conn.provider}:`)) {
+    return ensureSessionTabForApp(conn, activeKey.slice(conn.provider.length + 1));
+  }
+  const tabs = await browser.tabs.query({ url: conn.hostGlob });
   if (tabs[0]?.id != null) return tabs[0].id;
-  claudeTurn = null;
-  const created = await browser.tabs.create({ url: "https://claude.ai/new", active: false });
-  if (created.id == null) throw new Error("Could not open a claude.ai tab.");
+  sessionTurn = null;
+  const created = await browser.tabs.create({ url: conn.newChatUrl, active: false });
+  if (created.id == null) throw new Error(`Could not open a ${conn.provider} tab.`);
   await waitForTabLoad(created.id);
   return created.id;
 }
 
 // Content-script → runtime.sendMessage goes to the background but may not reach
-// extension pages (sidebar) directly in MV3. Relay claude-stream deltas so the
+// extension pages (sidebar) directly in MV3. Relay *-stream deltas so the
 // sidebar's onMessage listener receives them.
 browser.runtime.onMessage.addListener((message: unknown) => {
   const msg = message as any;
-  if (msg?.__hoc !== "claude-stream" || msg.__relayed) return undefined;
+  if (typeof msg?.__hoc !== "string" || !msg.__hoc.endsWith("-stream") || msg.__relayed) return undefined;
   browser.runtime.sendMessage({ ...msg, __relayed: true }).catch(() => {});
   return undefined;
 });
 
 browser.tabs.onRemoved.addListener((tabId) => {
   // Clear the tabId from any app session using this tab (keep chatUrl for reconnect).
-  for (const appId of Object.keys(appSessions)) {
-    if (appSessions[appId].tabId === tabId) delete appSessions[appId].tabId;
+  for (const key of Object.keys(appSessions)) {
+    if (appSessions[key].tabId === tabId) delete appSessions[key].tabId;
   }
-  browser.tabs.query({ url: "https://claude.ai/*" }).then((remaining) => {
-    if (remaining.length === 0) claudeTurn = null;
-  });
 });
 
-// Session-mode generation for ALL tools. Builds a lean message (slash-command
-// the uploaded skill, or inject the spec once for "primer"), primes the schema
-// once for schema-dependent tools, and returns the raw reply text (the Build tab
-// extracts JSON from it). Optionally streams deltas to the sidebar via streamId.
+// Session-mode generation for ALL tools. Builds a lean message (Claude:
+// slash-command the skill or inject the spec once; Gemini: the Gem holds the
+// instructions, so just schema-once + prompt), primes the schema once for
+// schema-dependent tools, and returns the raw reply text (the Build tab extracts
+// JSON from it). Optionally streams deltas to the sidebar via streamId.
 browser.runtime.onMessage.addListener((message: unknown) => {
   const msg = message as any;
-  if (!msg || msg.__hoc !== "claude-text") return undefined;
-  return runClaudeText(msg);
+  if (!msg || msg.__hoc !== "session-generate") return undefined;
+  return runSessionGenerate(msg);
 });
 
-async function runClaudeText(msg: {
-  system: string; prompt: string; schemaText: string; tables: Table[];
+async function runSessionGenerate(msg: {
+  provider: string; system: string; prompt: string; schemaText: string; tables: Table[];
   needsSchema: boolean; skillSource: "primer" | "account"; skillName: string; streamId?: string;
 }): Promise<{ text: string } | { error: string } | { needsLogin: true }> {
   try {
-    const tabId = await ensureClaudeTab();
-    // Non-schema tools keep the existing schema hash so they don't reset priming.
-    const schemaHash = msg.needsSchema ? hashSchema(msg.tables) : (claudeTurn?.schemaHash ?? "noschema");
-    const { primed, schemaChanged, next } = decideTurn(claudeTurn, schemaHash, tabId);
+    const settings = await getSettings();
+    const conn = connectorFor(msg.provider, settings);
+    const tabId = await ensureSessionTab(conn);
+    const schemaHash = msg.needsSchema ? hashSchema(msg.tables) : (sessionTurn?.schemaHash ?? "noschema");
+    const { primed, schemaChanged, next } = decideTurn(sessionTurn, schemaHash, tabId);
+    // Gemini: the Gem carries the instructions, so don't inject the spec/skill —
+    // send schema-once + prompt (account source with an empty skill name = no slash).
+    const gem = conn.provider === "gemini";
     const text = buildSessionMessage({
-      skillSource: msg.skillSource, skillName: msg.skillName, system: msg.system,
-      prompt: msg.prompt, schemaText: msg.schemaText, needsSchema: msg.needsSchema,
-      alreadyPrimed: primed, schemaChanged,
+      skillSource: gem ? "account" : msg.skillSource,
+      skillName: gem ? "" : msg.skillName,
+      system: msg.system, prompt: msg.prompt, schemaText: msg.schemaText,
+      needsSchema: msg.needsSchema, alreadyPrimed: primed, schemaChanged,
     });
-    const res: any = await browser.tabs.sendMessage(tabId, { __hoc: "claude-drive", text, expectJson: false, streamId: msg.streamId });
+    const res: any = await browser.tabs.sendMessage(tabId, { __hoc: conn.driveMsg, text, expectJson: false, streamId: msg.streamId });
     if (res?.needsLogin) return { needsLogin: true };
     if (res?.error) return { error: res.error };
-    claudeTurn = next; // advance only on success
+    sessionTurn = next; // advance only on success
     return { text: res.text ?? "" };
   } catch (e: any) {
     return { error: String(e?.message ?? e) };
   }
 }
 
-// "Check schema" in session mode: send the app schema to claude.ai once to prime
-// the conversation, so later asks don't resend it.
-browser.runtime.onMessage.addListener((message: unknown) => {
-  const msg = message as any;
-  if (!msg || msg.__hoc !== "claude-prime") return undefined;
-  return runClaudePrime(msg);
-});
-
-async function runClaudePrime(msg: { schemaText: string; tables: Table[] }): Promise<{ ok: true } | { error: string } | { needsLogin: true }> {
-  try {
-    const tabId = await ensureClaudeTab();
-    const text = `Here is the current AppSheet app schema — use it for the changesets and answers that follow:\n\n${msg.schemaText}`;
-    const res: any = await browser.tabs.sendMessage(tabId, { __hoc: "claude-drive", text, expectJson: false });
-    if (res?.needsLogin) return { needsLogin: true };
-    if (res?.error) return { error: res.error };
-    // Record that this schema is now primed so subsequent asks skip re-sending it.
-    claudeTurn = { primed: claudeTurn?.primed ?? false, schemaHash: hashSchema(msg.tables), tabId };
-    return { ok: true };
-  } catch (e: any) {
-    return { error: String(e?.message ?? e) };
-  }
-}
-
-// Prime a specific AppSheet app: navigate to its stored conversation (or create
-// a new one), send the schema with app context, and store the chatUrl so future
+// Prime a specific AppSheet app: navigate to its stored conversation (or start a
+// new one), send the schema with app context, and store the chatUrl so future
 // messages go to the same conversation.
 browser.runtime.onMessage.addListener((message: unknown) => {
   const msg = message as any;
-  if (!msg || msg.__hoc !== "claude-prime-app") return undefined;
-  return runClaudePrimeApp(msg);
+  if (!msg || msg.__hoc !== "session-prime-app") return undefined;
+  return runSessionPrimeApp(msg);
 });
 
-async function runClaudePrimeApp(msg: {
-  appId: string; appName: string; schemaText: string; tables: Table[];
+async function runSessionPrimeApp(msg: {
+  provider: string; appId: string; appName: string; schemaText: string; tables: Table[];
 }): Promise<{ ok: true } | { error: string } | { needsLogin: true }> {
   try {
-    const { appId, appName, schemaText } = msg;
-    if (activeAppId !== appId) { claudeTurn = null; activeAppId = appId; }
-    const tabId = await ensureClaudeTabForApp(appId);
+    const { provider, appId, appName, schemaText } = msg;
+    const settings = await getSettings();
+    const conn = connectorFor(provider, settings);
+    const key = keyFor(provider, appId);
+    if (activeKey !== key) { sessionTurn = null; activeKey = key; }
+    const tabId = await ensureSessionTabForApp(conn, appId);
     const text = `AppSheet app: ${appName} (ID: ${appId})\n\nHere is the current app schema — use it for changesets and answers that follow:\n\n${schemaText}`;
-    const res: any = await browser.tabs.sendMessage(tabId, { __hoc: "claude-drive", text, expectJson: false });
+    const res: any = await browser.tabs.sendMessage(tabId, { __hoc: conn.driveMsg, text, expectJson: false });
     if (res?.needsLogin) return { needsLogin: true };
     if (res?.error) return { error: res.error };
-    // Capture the conversation URL after first-message redirect (/new → /chat/uuid).
-    // Retry once — the redirect may not have settled by the time drive() returns.
+    // Capture the conversation URL after the first-message redirect. Retry once —
+    // the redirect may not have settled by the time drive() returns.
     let tab = await browser.tabs.get(tabId).catch(() => null);
-    if (!tab?.url?.includes("/chat/")) {
+    if (!tab?.url || !conn.isConvoUrl(tab.url)) {
       await new Promise<void>((r) => setTimeout(r, 600));
       tab = await browser.tabs.get(tabId).catch(() => null);
     }
-    if (tab?.url?.includes("/chat/")) {
-      appSessions[appId] = { ...(appSessions[appId] ?? {}), chatUrl: tab.url, tabId };
+    if (tab?.url && conn.isConvoUrl(tab.url)) {
+      appSessions[key] = { ...(appSessions[key] ?? {}), chatUrl: tab.url, tabId };
     }
-    claudeTurn = { primed: true, schemaHash: hashSchema(msg.tables), tabId };
+    sessionTurn = { primed: true, schemaHash: hashSchema(msg.tables), tabId };
     return { ok: true };
   } catch (e: any) {
     return { error: String(e?.message ?? e) };
@@ -270,37 +290,39 @@ async function runClaudePrimeApp(msg: {
 // Returns hasSession=true when a stored conversation exists for this app.
 browser.runtime.onMessage.addListener((message: unknown) => {
   const msg = message as any;
-  if (!msg || msg.__hoc !== "claude-switch-app") return undefined;
-  const appId: string = msg.appId;
-  const hasSession = !!appSessions[appId]?.chatUrl;
-  if (activeAppId !== appId) { claudeTurn = null; activeAppId = appId; }
+  if (!msg || msg.__hoc !== "session-switch-app") return undefined;
+  const key = keyFor(msg.provider, msg.appId);
+  const hasSession = !!appSessions[key]?.chatUrl;
+  if (activeKey !== key) { sessionTurn = null; activeKey = key; }
   return Promise.resolve({ ok: true, hasSession });
 });
 
-// Sign-in + status for the claude.ai session mode (settings UI).
+// Sign-in + status for session mode (settings UI). Carries the provider.
 browser.runtime.onMessage.addListener((message: unknown) => {
   const msg = message as any;
-  if (msg?.__hoc === "claude-signin") return claudeSignin();
-  if (msg?.__hoc === "claude-status") return claudeStatus();
+  if (msg?.__hoc === "session-signin") return sessionSignin(msg.provider);
+  if (msg?.__hoc === "session-status") return sessionStatus(msg.provider);
   return undefined;
 });
 
-/** Open (or focus) a claude.ai tab so the user can log in. */
-async function claudeSignin(): Promise<{ ok: true }> {
-  const tabs = await browser.tabs.query({ url: "https://claude.ai/*" });
+/** Open (or focus) the site so the user can log in. */
+async function sessionSignin(provider: string): Promise<{ ok: true }> {
+  const conn = connectorFor(provider, await getSettings());
+  const tabs = await browser.tabs.query({ url: conn.hostGlob });
   if (tabs[0]?.id != null) await browser.tabs.update(tabs[0].id, { active: true });
-  else await browser.tabs.create({ url: "https://claude.ai/new", active: true });
+  else await browser.tabs.create({ url: conn.newChatUrl, active: true });
   return { ok: true };
 }
 
-/** Report whether the user is signed into claude.ai (probes the driver in an
- *  existing tab; does not open one). */
-async function claudeStatus(): Promise<{ signedIn: boolean; hasTab: boolean }> {
-  const tabs = await browser.tabs.query({ url: "https://claude.ai/*" });
+/** Report whether the user is signed in (probes the driver in an existing tab;
+ *  does not open one). */
+async function sessionStatus(provider: string): Promise<{ signedIn: boolean; hasTab: boolean }> {
+  const conn = connectorFor(provider, await getSettings());
+  const tabs = await browser.tabs.query({ url: conn.hostGlob });
   const id = tabs[0]?.id;
   if (id == null) return { signedIn: false, hasTab: false };
   try {
-    const res: any = await browser.tabs.sendMessage(id, { __hoc: "claude-status" });
+    const res: any = await browser.tabs.sendMessage(id, { __hoc: conn.statusMsg });
     return { signedIn: !!res?.signedIn, hasTab: true };
   } catch {
     return { signedIn: false, hasTab: true }; // tab exists but driver not ready (needs reload)
