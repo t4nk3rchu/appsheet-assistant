@@ -88,32 +88,49 @@ function waitForTabLoad(tabId: number): Promise<void> {
 }
 
 /** Find or create a claude.ai tab for a specific app, navigating to its
- *  stored conversation URL when one exists. */
+ *  stored conversation URL when one exists. Prefers reusing an open tab
+ *  over creating a new one. */
 async function ensureClaudeTabForApp(appId: string): Promise<number> {
   const session = appSessions[appId] ?? (appSessions[appId] = {});
 
-  // Re-use an existing tab if it's still open.
+  // Re-use the stored tab if still open.
   if (session.tabId != null) {
     try {
       await browser.tabs.get(session.tabId);
       if (activeAppId !== appId) { claudeTurn = null; activeAppId = appId; }
       return session.tabId;
     } catch {
-      delete session.tabId; // tab was closed
+      delete session.tabId;
     }
   }
 
   // Find an open tab already at the stored conversation URL.
   if (session.chatUrl) {
-    const existing = await browser.tabs.query({ url: `${session.chatUrl}*` });
-    if (existing[0]?.id != null) {
-      session.tabId = existing[0].id;
+    const byUrl = await browser.tabs.query({ url: `${session.chatUrl}*` });
+    if (byUrl[0]?.id != null) {
+      session.tabId = byUrl[0].id;
       if (activeAppId !== appId) { claudeTurn = null; activeAppId = appId; }
       return session.tabId;
     }
   }
 
-  // Open a new tab — either the stored conversation or a fresh /new.
+  // Reuse any open claude.ai tab rather than opening a new one.
+  const anyClaudeTabs = await browser.tabs.query({ url: "https://claude.ai/*" });
+  if (anyClaudeTabs[0]?.id != null) {
+    session.tabId = anyClaudeTabs[0].id!;
+    // Navigate to the stored conversation if the tab is on a different URL.
+    if (session.chatUrl) {
+      const cur = anyClaudeTabs[0].url ?? "";
+      if (!cur.startsWith(session.chatUrl.split("?")[0])) {
+        await browser.tabs.update(session.tabId, { url: session.chatUrl });
+        await waitForTabLoad(session.tabId);
+      }
+    }
+    if (activeAppId !== appId) { claudeTurn = null; activeAppId = appId; }
+    return session.tabId;
+  }
+
+  // No claude.ai tab open at all — open a new one.
   const url = session.chatUrl ?? "https://claude.ai/new";
   const created = await browser.tabs.create({ url, active: false });
   if (created.id == null) throw new Error("Could not open a claude.ai tab.");
@@ -233,7 +250,12 @@ async function runClaudePrimeApp(msg: {
     if (res?.needsLogin) return { needsLogin: true };
     if (res?.error) return { error: res.error };
     // Capture the conversation URL after first-message redirect (/new → /chat/uuid).
-    const tab = await browser.tabs.get(tabId).catch(() => null);
+    // Retry once — the redirect may not have settled by the time drive() returns.
+    let tab = await browser.tabs.get(tabId).catch(() => null);
+    if (!tab?.url?.includes("/chat/")) {
+      await new Promise<void>((r) => setTimeout(r, 600));
+      tab = await browser.tabs.get(tabId).catch(() => null);
+    }
     if (tab?.url?.includes("/chat/")) {
       appSessions[appId] = { ...(appSessions[appId] ?? {}), chatUrl: tab.url, tabId };
     }

@@ -248,7 +248,13 @@ export function Sidebar() {
       }
       if (s && s.provider === "claude" && s.claudeAuthMode === "session") {
         if (!live.length || !schema.appId) throw new Error("Open the AppSheet editor first.");
-        await primeApp(schema.appId!, schema.appName ?? schema.appId!, live);
+        // Only prime if no existing session — avoids opening a new tab unnecessarily.
+        const switchRes: any = await browser.runtime.sendMessage({
+          __hoc: "claude-switch-app", appId: schema.appId!,
+        }).catch(() => null);
+        if (!switchRes?.hasSession) {
+          await primeApp(schema.appId!, schema.appName ?? schema.appId!, live);
+        }
       }
       setSchemaState("ok");
     } catch (e: any) {
