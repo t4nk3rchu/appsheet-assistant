@@ -41,29 +41,30 @@ function sendButton(): HTMLButtonElement | null {
   return document.querySelector<HTMLButtonElement>('button[aria-label="Send message"], button[aria-label="Send Message"]');
 }
 
-/** True while a response is streaming (a Stop button is present). */
+/** True while a response is streaming (a Stop button is present).
+ *  Uses a broad aria-label match since the exact label varies by claude.ai version. */
 function isStreaming(): boolean {
-  return !!document.querySelector('button[aria-label="Stop response"], button[aria-label="Stop generating"]');
+  return !!document.querySelector('button[aria-label*="Stop" i], button[aria-label*="stop" i]');
 }
 
 /** Text of the last assistant message block.
- *  Tries multiple selectors so the driver survives claude.ai DOM changes. */
+ *  Confirmed selectors via live DOM probe (2026-08-26):
+ *  - Assistant turn container: class contains "msg-assistant-pb"
+ *  - Response body paragraphs: class contains "font-claude-response-body"  */
 function lastAssistantText(): string {
-  const candidates = [
-    '[data-testid="assistant-message"]',
-    '[data-testid="assistant-turn"]',
-    '.font-claude-message',
-    '[class*="assistant"] [class*="prose"]',
-    '[class*="ConversationItem"]:last-child',
-  ];
-  for (const sel of candidates) {
-    const els = Array.from(document.querySelectorAll<HTMLElement>(sel));
-    if (!els.length) continue;
-    const last = els[els.length - 1];
-    const text = (last.innerText || last.textContent || "").trim();
-    if (text) return text;
+  const containers = Array.from(document.querySelectorAll<HTMLElement>('[class*="msg-assistant-pb"]'));
+  if (containers.length) {
+    const last = containers[containers.length - 1];
+    const bodyEls = Array.from(last.querySelectorAll<HTMLElement>('[class*="font-claude-response-body"]'));
+    if (bodyEls.length) {
+      return bodyEls.map((el) => el.innerText || el.textContent || "").join("\n").trim();
+    }
+    // Fallback: strip the "Claude responded:" header from the container's full text.
+    return (last.innerText || last.textContent || "").replace(/^Claude responded:\s*/i, "").trim();
   }
-  return "";
+  // Final fallback: collect all response-body paragraphs on the page.
+  const bodyEls = Array.from(document.querySelectorAll<HTMLElement>('[class*="font-claude-response-body"]'));
+  return bodyEls.map((el) => el.innerText || el.textContent || "").join("\n").trim();
 }
 
 async function drive(
