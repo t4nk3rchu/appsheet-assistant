@@ -109,17 +109,51 @@ to the provider you configure.
 
 ## Providers
 
-**v1 ships with two providers (bring your own key):**
+The extension supports four providers. Switch between them in Settings → Provider.
+
+### Session providers (no API key)
+
+These drive your **already-logged-in browser tab** — no API key required.
+
+#### Claude (claude.ai session)
+
+Uses your claude.ai subscription. Settings → Provider → **Claude** → Auth → **Sign in (claude.ai session)**.
+
+- Optional: if you have the [AppSheet Architect skill](https://github.com/t4nk3rchu/appsheet-architect) installed on claude.ai, tick "I have the AppSheet Architect skill" and enter its name — the extension sends `/<skillName> <prompt>` instead of injecting the full spec each time.
+- Without the skill: the extension injects the AppSheet schema primer on the first message of each app conversation and reuses it for the rest of the session.
+
+#### Gemini (Gemini Gem session)
+
+Uses a **Gem** you create on [gemini.google.com](https://gemini.google.com). The Gem holds the AppSheet instructions; the extension never re-injects them. Settings → Provider → **Gemini** → Auth → **Sign in (gemini.google.com Gem)** → paste the Gem URL.
+
+1. Create a Gem at gemini.google.com with the [AppSheet Architect instructions](https://github.com/t4nk3rchu/appsheet-architect) as its system prompt.
+2. Paste the Gem URL (e.g. `https://gemini.google.com/gem/<id>`) in Settings.
+
+### Per-app sessions and the Link button
+
+When using a session provider, each AppSheet app gets its own dedicated
+conversation thread. The **Link** button (header, session mode only) connects
+the current app:
+
+1. Detects the open AppSheet editor app (ID + name + schema).
+2. Finds or reuses an existing conversation for this app (stored by `provider:appId`).
+3. Sends the schema once; all subsequent requests in that session skip re-priming.
+
+App switches are detected automatically (browser tab activate / page load) — the
+extension reconnects to the right conversation without pressing Link again, as long
+as the browser tab with the session site is still open.
+
+### API-key providers (bring your own key)
 
 - **Google Gemini** (`:generateContent`) — key from [Google AI Studio](https://aistudio.google.com/app/apikey).
 - **DeepSeek** (OpenAI-compatible `chat/completions`) — key from the [DeepSeek platform](https://platform.deepseek.com/).
+- **Claude API** — Anthropic Messages API key from [console.anthropic.com](https://console.anthropic.com). Select Provider → Claude → Auth → API key.
 
-Enter the key(s) in the extension's options page.
+Enter the key in Settings → API key.
 
 ### Local models (Ollama / LM Studio)
 
-Each provider's base URL is user-configurable. Point the DeepSeek adapter's base
-URL at any OpenAI-compatible local server:
+Each API provider's base URL is user-configurable. Point the DeepSeek adapter at any OpenAI-compatible local server:
 
 - Ollama: `http://localhost:11434/v1`
 - LM Studio: `http://localhost:1234/v1`

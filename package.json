@@ -1,7 +1,7 @@
 {
   "name": "appsheet-assistant",
-  "version": "1.2.0",
-  "description": "AI assistant for the AppSheet editor: build columns/views/actions, check schema, back up config. Open-source, cross-browser (Firefox 128+ / Chrome) rebuild.",
+  "version": "1.3.0",
+  "description": "AI assistant for the AppSheet editor: build columns/views/actions, back up config. Session connectors for claude.ai and Gemini Gems (no API key). Open-source, cross-browser (Firefox 142+ / Chrome) rebuild.",
   "private": true,
   "type": "module",
   "scripts": {

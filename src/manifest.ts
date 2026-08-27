@@ -6,8 +6,8 @@ export function buildManifest(target: Target) {
     manifest_version: 3,
     // NB: add-on name must not contain "Firefox"/"Mozilla" (AMO trademark rule).
     name: "AppSheet Copilot",
-    version: "1.2.0",
-    description: "AI assistant for the AppSheet editor: build columns/views/actions, check schema, back up config.",
+    version: "1.3.0",
+    description: "AI assistant for the AppSheet editor: build columns/views/actions, back up config. Session connectors for claude.ai and Gemini Gems (no API key).",
     icons: { "48": "icons/icon48.png", "128": "icons/icon128.png" },
     // No default_popup: clicking the toolbar icon toggles the sidebar / side
     // panel instead (wired in src/background/index.ts).
